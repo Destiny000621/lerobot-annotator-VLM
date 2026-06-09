@@ -1,4 +1,4 @@
-# lerobot-annotator
+# lerobot-annotator-VLM
 
 VLM-driven sub-task annotator for [LeRobot](https://huggingface.co/lerobot) v3.0 datasets with human-in-the-loop verification.
 

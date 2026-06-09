@@ -1,0 +1,12 @@
+.venv/
+.secrets/
+__pycache__/
+*.pyc
+annotations/
+overrides/
+keyframes_cache/
+video_cache/
+success_states/
+meta_cache/
+output_lerobot/
+verifications/

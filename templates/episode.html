@@ -1,0 +1,425 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>ep{{ ep }} — {{ repo }}</title>
+<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+  .first-frame { max-width: 480px; }
+  .seg-row { background: #f8f9fa; padding: 8px; border-radius: 6px; margin-bottom: 6px; }
+  .seg-row.changed { background: #fff3cd; }
+  .preview-thumb { height: 80px; }
+  .progress-pill { background: #0d6efd; color: white; padding: 2px 8px; border-radius: 12px; font-size: 0.8em; }
+  .timeline { height: 26px; background: #eee; border-radius: 4px; overflow: hidden; display: flex; }
+  .timeline .slot { display: flex; align-items: center; justify-content: center; font-size: 0.65em; color: white; }
+  textarea.instr { width: 100%; }
+</style>
+</head>
+<body class="container py-4">
+  <a href="/?repo={{ repo }}&task={{ task or '' }}">&larr; back</a>
+  <h3>Episode {{ ep }}
+    <span class="badge bg-secondary">{{ ann.duration_s|round(1) }}s</span>
+    <span id="status-badge" class="badge {% if override.status == 'verified' %}bg-success{% elif override.status == 'needs_rework' %}bg-danger{% else %}bg-warning text-dark{% endif %}">{{ override.status }}</span>
+    {% if ann.get('exemplars_used') %}
+      <span class="badge bg-info text-dark" title="{{ ann.exemplars_used|tojson }}">
+        few-shot: {{ ann.exemplars_used|length }} exemplars (eps {{ ann.exemplars_used | map(attribute='episode') | list }})
+      </span>
+    {% endif %}
+    {% if verification.get('stale') %}
+      <span class="badge bg-warning text-dark">AI verifier: stale</span>
+    {% elif verification.get('overall_consensus') %}
+      {% set cons = verification.overall_consensus %}
+      {% if cons.overall == 'pass' %}
+        <span class="badge bg-success">AI verified: pass</span>
+      {% elif cons.overall == 'issues_found' %}
+        <span class="badge bg-danger">AI: {{ cons.n_major }} major / {{ cons.n_minor }} minor</span>
+      {% endif %}
+    {% endif %}
+    <button id="reset-ov-btn" class="btn btn-sm btn-outline-danger" type="button"
+            title="Clear pinned_count, pinned_fields, pinned_segments; lets a fresh re-annotate run a real count vote">↺ Reset overrides</button>
+    <button id="run-verify-btn" class="btn btn-sm btn-outline-info" type="button">↻ Run AI verifier</button>
+    {% if verification.get('verifiers') and not verification.get('stale') %}
+      <button id="apply-corr-btn" class="btn btn-sm btn-outline-primary" type="button"
+              title="Apply structured corrections (count, sequence, per-segment arm/vial/primitive) from the verifier">⚙ Apply AI corrections</button>
+    {% endif %}
+  </h3>
+
+  {% if verification.get('stale') %}
+  <div class="alert alert-warning py-2">
+    Existing AI verifier results are stale because the annotation changed after they were produced. Run the verifier again before applying AI corrections.
+  </div>
+  {% elif verification.get('verifiers') %}
+  <div class="alert alert-info py-2">
+    <strong>AI verifier summary:</strong>
+    {% for model_id, r in verification.verifiers.items() %}
+      <div class="small">
+        <strong>{{ model_id }}</strong>:
+        {% if r.error %}<span class="text-danger">error: {{ r.error }}</span>
+        {% else %}{{ (r.parsed or {}).get('summary', '(no summary)') }}{% endif %}
+      </div>
+    {% endfor %}
+    {% if episode_issues %}
+      <div class="mt-2">
+        <strong>Episode-level issues:</strong>
+        <ul class="mb-0">
+        {% for issue in episode_issues %}
+          <li><span class="badge bg-{% if issue.severity == 'major' %}danger{% else %}warning text-dark{% endif %}">{{ issue.severity }}</span>
+              <code>{{ issue.type }}</code> — {{ issue.description }}
+              <span class="text-muted">({{ issue.model }})</span></li>
+        {% endfor %}
+        </ul>
+      </div>
+    {% endif %}
+  </div>
+  {% endif %}
+
+  {# ---- video players ---- #}
+  {% if head_cam %}
+  <div class="mb-3">
+    <video id="head-video" controls preload="metadata"
+           src="/video/{{ repo.replace('/','__') }}/{{ ep }}/{{ head_cam }}.mp4"
+           style="max-width:640px; width:100%; background:#000;"></video>
+    <div class="mt-1">
+      <span class="text-muted small me-2">head_camera @ <span id="vid-t">0.00</span>s</span>
+      <button id="toggle-wrists" class="btn btn-sm btn-outline-secondary" type="button">show wrist cameras</button>
+      <span class="text-muted small ms-2" id="hevc-hint">If video shows black: HEVC may not be supported in your browser — use Safari, or transcode the cached mp4 to H.264.</span>
+    </div>
+    <div id="wrist-row" class="row mt-2" style="display:none;">
+      {% for cam in wrist_cams %}
+      <div class="col-md-6">
+        <div class="small text-muted">{{ cam }}</div>
+        <video class="wrist-video" data-cam="{{ cam }}" controls preload="none"
+               src="/video/{{ repo.replace('/','__') }}/{{ ep }}/{{ cam }}.mp4"
+               style="width:100%; background:#000;"></video>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+
+  <div class="row">
+    <div class="col-md-5">
+      <h5>First frame</h5>
+      <img class="first-frame border" src="/img/frame_at/{{ repo.replace('/','__') }}/{{ ep }}/0.0.jpg" alt="first frame">
+      <hr>
+      <h5>Episode fields</h5>
+      <div class="mb-2">
+        {% set cr = ann.count_resolution or {} %}
+        {% set src = cr.get('source', 'unset') %}
+        <label class="form-label">
+          Count ({{ src }})
+          {% if src == 'override' %}
+            <span class="badge bg-warning text-dark" title="Sourced from override.pinned_count, not from a count vote. Click ↺ Reset overrides at the top to run a fresh vote.">stale?</span>
+          {% endif %}
+        </label>
+        <input id="count" type="number" class="form-control" value="{{ ann.get('total_vials') or '' }}" min="1" max="9">
+      </div>
+      <div class="mb-2">
+        <label class="form-label">stand_slots</label>
+        <input id="stand_slots" type="number" class="form-control" value="{{ ann.get('stand_slots') or '' }}">
+      </div>
+      <div class="mb-2">
+        <label class="form-label">vial_descriptors (JSON)</label>
+        <textarea id="vial_descriptors" class="form-control" rows="4">{{ ann.get('vial_descriptors')|tojson(indent=2) if ann.get('vial_descriptors') else '[]' }}</textarea>
+      </div>
+      <div class="mb-2">
+        <label class="form-label">pickup_sequence (JSON)</label>
+        <input id="pickup_sequence" class="form-control" value='{{ ann.get('pickup_sequence')|tojson if ann.get('pickup_sequence') else "[]" }}'>
+      </div>
+      <hr>
+      <h5>Success states</h5>
+      {% if ann.get('segments') %}
+        <div class="d-flex flex-wrap gap-2">
+        {% for seg in ann.segments %}
+          {% if seg.get('success_frame_path') %}
+            <div>
+              <img class="preview-thumb border" src="/img/success/{{ repo.replace('/','__') }}/{{ ep }}/{{ seg.success_frame_path.split('/')[-1] }}">
+              <div class="text-muted small">seg {{ loop.index0 }} ({{ seg.primitive }}{% if seg.vial_id %}, vial {{ seg.vial_id }}{% endif %})</div>
+            </div>
+          {% endif %}
+        {% endfor %}
+        </div>
+      {% endif %}
+    </div>
+
+    <div class="col-md-7">
+      <h5>Segments timeline</h5>
+      <div class="timeline" id="timeline"></div>
+      <small class="text-muted d-block mb-2">Edit start_s / end_s / arm / primitive / vial_id / instruction below. Save commits to overrides.</small>
+
+      <div id="segments">
+      {% for seg in ann.segments %}
+        {% set seg_idx = loop.index0 %}
+        <div class="seg-row {% if seg_issues.get(seg_idx) %}border border-2 border-danger{% endif %}" data-idx="{{ seg_idx }}">
+          {% if seg_issues.get(seg_idx) %}
+            <div class="alert alert-warning py-1 mb-1 small">
+              {% for issue in seg_issues[seg_idx] %}
+                <div>
+                  <span class="badge bg-{% if issue.severity == 'major' %}danger{% else %}warning text-dark{% endif %}">{{ issue.severity }}</span>
+                  <code>{{ issue.type }}</code> — {{ issue.description }}
+                  <span class="text-muted">({{ issue.model }})</span>
+                </div>
+              {% endfor %}
+            </div>
+          {% endif %}
+          <div class="row g-1 align-items-center">
+            <div class="col-1"><span class="progress-pill">{{ seg.progress or '?' }}</span></div>
+            <div class="col-2"><input class="form-control form-control-sm s-start" type="number" step="0.1" value="{{ seg.start_s }}"></div>
+            <div class="col-2"><input class="form-control form-control-sm s-end" type="number" step="0.1" value="{{ seg.end_s }}"></div>
+            <div class="col-2">
+              <select class="form-select form-select-sm s-arm">
+                {% for a in ['left','right','both'] %}<option value="{{ a }}" {% if seg.arm==a %}selected{% endif %}>{{ a }}</option>{% endfor %}
+              </select>
+            </div>
+            <div class="col-2">
+              <select class="form-select form-select-sm s-prim">
+                {% for p in ['approach','grasp','transport','align','insert','retract','idle'] %}<option value="{{ p }}" {% if seg.primitive==p %}selected{% endif %}>{{ p }}</option>{% endfor %}
+              </select>
+            </div>
+            <div class="col-2"><input class="form-control form-control-sm s-vial" type="number" min="0" placeholder="vial_id" value="{{ seg.vial_id or '' }}"></div>
+            <div class="col-1 text-end">
+              <button class="btn btn-sm btn-outline-success play-btn" title="play this segment">▶</button>
+              <button class="btn btn-sm btn-outline-secondary preview-btn" title="frame at midpoint">👁</button>
+              <button class="btn btn-sm btn-outline-danger del-btn" title="delete">×</button>
+            </div>
+          </div>
+          <textarea class="instr form-control form-control-sm mt-1" rows="1">{{ seg.instruction }}</textarea>
+          <input class="form-control form-control-sm mt-1 s-prog" placeholder="progress (k/N)" value="{{ seg.progress }}">
+          <div class="preview-area mt-1"></div>
+        </div>
+      {% endfor %}
+      </div>
+
+      <button id="add-seg" class="btn btn-outline-secondary btn-sm mt-2">+ Add segment</button>
+
+      <hr>
+      <div class="d-flex gap-2">
+        <button id="save-btn" class="btn btn-primary">💾 Save</button>
+        <button id="approve-btn" class="btn btn-success">✓ Approve</button>
+        <button id="reject-btn" class="btn btn-danger">✗ Needs rework</button>
+        <button id="rerun-btn" class="btn btn-warning">↻ Re-annotate with overrides</button>
+        <span id="status-text" class="ms-3 text-muted"></span>
+      </div>
+    </div>
+  </div>
+
+<script>
+const REPO = {{ repo|tojson }};
+const REPO_SAFE = REPO.replaceAll('/', '__');
+const EP = {{ ep }};
+const DUR = {{ ann.duration_s|float }};
+
+function colorFor(prim) {
+  return ({approach:"#6c757d", grasp:"#0d6efd", transport:"#20c997",
+          align:"#ffc107", insert:"#198754", retract:"#dc3545", idle:"#adb5bd"})[prim] || "#777";
+}
+
+function renderTimeline() {
+  const tl = document.getElementById('timeline');
+  tl.innerHTML = '';
+  document.querySelectorAll('#segments .seg-row').forEach(row => {
+    const s = parseFloat(row.querySelector('.s-start').value || 0);
+    const e = parseFloat(row.querySelector('.s-end').value || 0);
+    const prim = row.querySelector('.s-prim').value;
+    if (e <= s || DUR <= 0) return;
+    const d = document.createElement('div');
+    d.className = 'slot';
+    d.style.width = ((e - s) / DUR * 100) + '%';
+    d.style.background = colorFor(prim);
+    d.title = `${s.toFixed(1)}-${e.toFixed(1)}s ${prim}`;
+    d.textContent = prim.slice(0,3);
+    tl.appendChild(d);
+  });
+}
+
+function collectSegments() {
+  const segs = [];
+  document.querySelectorAll('#segments .seg-row').forEach(row => {
+    segs.push({
+      start_s: parseFloat(row.querySelector('.s-start').value),
+      end_s:   parseFloat(row.querySelector('.s-end').value),
+      arm:     row.querySelector('.s-arm').value,
+      primitive: row.querySelector('.s-prim').value,
+      vial_id: row.querySelector('.s-vial').value ? parseInt(row.querySelector('.s-vial').value) : null,
+      instruction: row.querySelector('.instr').value,
+      progress: row.querySelector('.s-prog').value,
+    });
+  });
+  return segs;
+}
+
+function buildBody(includeStatus=null) {
+  let descs;
+  try { descs = JSON.parse(document.getElementById('vial_descriptors').value); }
+  catch (e) { descs = undefined; }
+  let seq;
+  try { seq = JSON.parse(document.getElementById('pickup_sequence').value); }
+  catch (e) { seq = undefined; }
+  const body = {
+    repo: REPO,
+    total_vials: parseInt(document.getElementById('count').value) || null,
+    stand_slots: parseInt(document.getElementById('stand_slots').value) || null,
+    vial_descriptors: descs,
+    pickup_sequence: seq,
+    segments: collectSegments(),
+  };
+  if (includeStatus) body.status = includeStatus;
+  Object.keys(body).forEach(k => body[k] === undefined && delete body[k]);
+  return body;
+}
+
+async function save(status=null) {
+  const r = await fetch(`/api/episode/${EP}/save`, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(buildBody(status)),
+  });
+  const j = await r.json();
+  document.getElementById('status-text').textContent = j.ok ? 'saved ✓' : ('error: ' + JSON.stringify(j));
+}
+
+document.getElementById('save-btn').onclick = () => save();
+document.getElementById('approve-btn').onclick = async () => {
+  await save();
+  await fetch(`/api/episode/${EP}/approve`, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({repo: REPO})});
+  document.getElementById('status-text').textContent = 'verified ✓';
+  document.getElementById('status-badge').className = 'badge bg-success';
+  document.getElementById('status-badge').textContent = 'verified';
+};
+document.getElementById('reject-btn').onclick = async () => {
+  await fetch(`/api/episode/${EP}/reject`, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({repo: REPO})});
+  document.getElementById('status-badge').className = 'badge bg-danger';
+  document.getElementById('status-badge').textContent = 'needs_rework';
+};
+document.getElementById('rerun-btn').onclick = async () => {
+  await save();
+  await fetch(`/api/episode/${EP}/rerun`, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({repo: REPO, task: {{ (task or 'vial_place')|tojson }}})});
+  document.getElementById('status-text').textContent = 're-annotation started in background — refresh page in ~30s';
+};
+
+const applyCorrBtn = document.getElementById('apply-corr-btn');
+if (applyCorrBtn) {
+  applyCorrBtn.onclick = async () => {
+    applyCorrBtn.disabled = true;
+    applyCorrBtn.textContent = '⏳ applying…';
+    const r = await fetch(`/api/episode/${EP}/apply_corrections`, {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({repo: REPO}),
+    });
+    const j = await r.json();
+    if (j.ok && j.no_corrections) {
+      document.getElementById('status-text').textContent = 'no structured corrections were emitted by the verifier';
+    } else if (j.ok) {
+      const a = j.applied || {};
+      const parts = [];
+      if (a.total_vials !== undefined) parts.push(`count ${a.total_vials.from}→${a.total_vials.to}`);
+      if (a.pickup_sequence) parts.push(`pickup_sequence→${JSON.stringify(a.pickup_sequence)}`);
+      if (a.vial_descriptors) parts.push(`descriptors (${a.vial_descriptors.length})`);
+      if (a.segments) parts.push(`${a.segments.length} segment edit(s)`);
+      if (a.skipped_noop_segment_edits) parts.push(`${a.skipped_noop_segment_edits} no-op(s) skipped`);
+      if (a.progress_denominators_rewritten) parts.push(`${a.progress_denominators_rewritten} progress denom(s) rewritten`);
+      let msg = 'applied: ' + (parts.join(', ') || '-') + ' — reload to see changes';
+      if (a.note) msg += '\n→ ' + a.note;
+      document.getElementById('status-text').textContent = msg;
+    } else {
+      document.getElementById('status-text').textContent = 'error: ' + (j.error || JSON.stringify(j));
+    }
+    applyCorrBtn.disabled = false;
+    applyCorrBtn.textContent = '⚙ Apply AI corrections';
+  };
+}
+
+document.getElementById('reset-ov-btn').onclick = async () => {
+  if (!confirm("Reset all pinned overrides for this episode (count, fields, segments, status)? Annotations on disk are not changed.")) return;
+  const r = await fetch(`/api/episode/${EP}/reset_overrides`, {
+    method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({repo: REPO}),
+  });
+  const j = await r.json();
+  document.getElementById('status-text').textContent = j.ok
+    ? 'overrides cleared — click ↻ Re-annotate to run a fresh count vote'
+    : ('error: ' + JSON.stringify(j));
+};
+
+document.getElementById('run-verify-btn').onclick = async () => {
+  const btn = document.getElementById('run-verify-btn');
+  btn.disabled = true;
+  btn.textContent = '⏳ running AI verifier…';
+  const r = await fetch(`/api/episode/${EP}/verify`, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({repo: REPO, task: {{ (task or 'vial_place')|tojson }}})});
+  const j = await r.json();
+  document.getElementById('status-text').textContent = j.ok
+    ? 'AI verifier running in background (~2min) — refresh to see results'
+    : ('error: ' + JSON.stringify(j));
+};
+
+document.getElementById('add-seg').onclick = () => {
+  const segs = document.getElementById('segments');
+  const last = segs.lastElementChild;
+  const clone = last.cloneNode(true);
+  clone.querySelector('.s-start').value = last.querySelector('.s-end').value;
+  clone.querySelector('.s-end').value = DUR;
+  segs.appendChild(clone);
+  wireRow(clone);
+  renderTimeline();
+};
+
+const headVid = document.getElementById('head-video');
+const wristVids = () => Array.from(document.querySelectorAll('.wrist-video'));
+let pauseAtSec = null;
+
+function syncWristTime(t) {
+  wristVids().forEach(v => { if (Math.abs(v.currentTime - t) > 0.15) v.currentTime = t; });
+}
+
+if (headVid) {
+  headVid.addEventListener('timeupdate', () => {
+    document.getElementById('vid-t').textContent = headVid.currentTime.toFixed(2);
+    if (pauseAtSec !== null && headVid.currentTime >= pauseAtSec) {
+      headVid.pause();
+      wristVids().forEach(v => v.pause());
+      pauseAtSec = null;
+    }
+  });
+  headVid.addEventListener('seeked', () => syncWristTime(headVid.currentTime));
+  headVid.addEventListener('play',   () => wristVids().forEach(v => v.play().catch(()=>{})));
+  headVid.addEventListener('pause',  () => wristVids().forEach(v => v.pause()));
+}
+
+const toggleBtn = document.getElementById('toggle-wrists');
+if (toggleBtn) {
+  toggleBtn.onclick = () => {
+    const r = document.getElementById('wrist-row');
+    const showing = r.style.display !== 'none';
+    r.style.display = showing ? 'none' : 'flex';
+    toggleBtn.textContent = showing ? 'show wrist cameras' : 'hide wrist cameras';
+    if (!showing) wristVids().forEach(v => { v.load(); v.currentTime = headVid.currentTime; });
+  };
+}
+
+function wireRow(row) {
+  row.querySelectorAll('.s-start, .s-end, .s-prim').forEach(el => el.addEventListener('input', renderTimeline));
+  row.querySelector('.del-btn').onclick = () => { row.remove(); renderTimeline(); };
+  row.querySelector('.preview-btn').onclick = async () => {
+    const s = parseFloat(row.querySelector('.s-start').value);
+    const e = parseFloat(row.querySelector('.s-end').value);
+    const mid = (s + e) / 2;
+    const area = row.querySelector('.preview-area');
+    area.innerHTML = `<img src="/img/frame_at/${REPO_SAFE}/${EP}/${mid.toFixed(2)}.jpg" style="max-height:140px" class="border">`;
+  };
+  row.querySelector('.play-btn').onclick = () => {
+    if (!headVid) return;
+    const s = parseFloat(row.querySelector('.s-start').value);
+    const e = parseFloat(row.querySelector('.s-end').value);
+    pauseAtSec = e;
+    headVid.currentTime = s;
+    syncWristTime(s);
+    headVid.play().catch(()=>{});
+    headVid.scrollIntoView({behavior:'smooth', block:'start'});
+  };
+}
+document.querySelectorAll('#segments .seg-row').forEach(wireRow);
+renderTimeline();
+</script>
+</body>
+</html>

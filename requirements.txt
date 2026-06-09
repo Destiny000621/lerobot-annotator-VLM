@@ -1,0 +1,7 @@
+pyarrow>=18
+openai>=1.50
+pillow>=10
+av>=14
+pandas>=2.2
+flask>=3
+pyyaml>=6

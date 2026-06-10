@@ -13,12 +13,12 @@ from pathlib import Path
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from .config import ANNOTATIONS_DIR, OUTPUT_LEROBOT, repo_safe_name
+from .config import DEFAULT_ANNOTATOR, OUTPUT_LEROBOT, annotation_dir, repo_safe_name, model_safe_name
 from .dataset import LeRobotDataset
 
 
-def _annotation_path(repo_id: str, ep: int) -> Path:
-    return ANNOTATIONS_DIR / repo_safe_name(repo_id) / f"episode_{ep:06d}.json"
+def _annotation_path(repo_id: str, ep: int, annotator_model: str) -> Path:
+    return annotation_dir(repo_id, annotator_model) / f"episode_{ep:06d}.json"
 
 
 def _segments_to_per_frame(ann: dict, fps: int, fallback: str) -> list[str]:
@@ -71,8 +71,9 @@ def materialize(
     dataset: LeRobotDataset,
     episodes: list[int],
     default_task: str | None = None,
+    annotator_model: str = DEFAULT_ANNOTATOR,
 ) -> dict:
-    out_root = OUTPUT_LEROBOT / repo_safe_name(dataset.repo_id)
+    out_root = OUTPUT_LEROBOT / repo_safe_name(dataset.repo_id) / model_safe_name(annotator_model)
     out_root.mkdir(parents=True, exist_ok=True)
     (out_root / "meta").mkdir(parents=True, exist_ok=True)
 
@@ -81,7 +82,7 @@ def materialize(
 
     annotations = []
     for ep in episodes:
-        p = _annotation_path(dataset.repo_id, ep)
+        p = _annotation_path(dataset.repo_id, ep, annotator_model)
         if not p.exists():
             raise FileNotFoundError(f"no annotation for ep {ep}: {p}")
         annotations.append(json.loads(p.read_text()))

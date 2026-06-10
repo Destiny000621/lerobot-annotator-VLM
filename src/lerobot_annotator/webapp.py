@@ -7,8 +7,10 @@ from pathlib import Path
 from flask import Flask, jsonify, redirect, request, send_file, send_from_directory, url_for, render_template
 
 from .config import (
-    ANNOTATIONS_DIR, KEYFRAMES_CACHE, OVERRIDES_DIR, SUCCESS_STATES_DIR, VIDEO_CACHE,
-    repo_safe_name,
+    ANNOTATIONS_DIR, DEFAULT_ANNOTATOR, KEYFRAMES_CACHE, OVERRIDES_DIR,
+    SUCCESS_STATES_DIR, VIDEO_CACHE,
+    annotation_dir, list_annotators_for_repo, model_safe_name, repo_safe_name,
+    success_states_dir,
 )
 from .dataset import LeRobotDataset
 from .annotate import annotate_episode
@@ -22,12 +24,12 @@ from .verify import is_verification_stale, load_verification, verify_episode
 _RUNNING_RERUNS: dict[str, threading.Thread] = {}
 
 
-def _annotation_path(repo_id: str, ep: int) -> Path:
-    return ANNOTATIONS_DIR / repo_safe_name(repo_id) / f"episode_{ep:06d}.json"
+def _annotation_path(repo_id: str, ep: int, annotator_model: str) -> Path:
+    return annotation_dir(repo_id, annotator_model) / f"episode_{ep:06d}.json"
 
 
-def _list_annotated_episodes(repo_id: str) -> list[int]:
-    d = ANNOTATIONS_DIR / repo_safe_name(repo_id)
+def _list_annotated_episodes(repo_id: str, annotator_model: str) -> list[int]:
+    d = annotation_dir(repo_id, annotator_model)
     if not d.exists():
         return []
     eps = []
@@ -37,6 +39,16 @@ def _list_annotated_episodes(repo_id: str) -> list[int]:
         except Exception:
             continue
     return sorted(eps)
+
+
+def _resolve_annotator(repo_id: str, requested: str | None) -> str:
+    """Pick which annotator subdir to show. Explicit > URL default > first discovered > config default."""
+    if requested:
+        return requested
+    candidates = list_annotators_for_repo(repo_id)
+    if candidates:
+        return candidates[0]
+    return DEFAULT_ANNOTATOR
 
 
 def create_app(default_repo: str | None = None, default_task: str | None = None) -> Flask:
@@ -53,16 +65,19 @@ def create_app(default_repo: str | None = None, default_task: str | None = None)
     def index():
         repo = request.args.get("repo") or app.config["DEFAULT_REPO"]
         task_name = request.args.get("task") or app.config["DEFAULT_TASK"]
+        requested_annotator = request.args.get("annotator")
+        annotator_model = _resolve_annotator(repo, requested_annotator) if repo else DEFAULT_ANNOTATOR
+        annotators_available = list_annotators_for_repo(repo) if repo else []
         episodes = []
         n_verified = 0
         if repo:
-            for ep in _list_annotated_episodes(repo):
-                ann = json.loads(_annotation_path(repo, ep).read_text())
+            for ep in _list_annotated_episodes(repo, annotator_model):
+                ann = json.loads(_annotation_path(repo, ep, annotator_model).read_text())
                 ov = load_override(repo, ep)
                 if ov.status == "verified":
                     n_verified += 1
-                loaded_verification = load_verification(repo, ep)
-                stale = bool(loaded_verification) and is_verification_stale(repo, ep)
+                loaded_verification = load_verification(repo, ep, annotator_model)
+                stale = bool(loaded_verification) and is_verification_stale(repo, ep, annotator_model)
                 v = {} if stale else (loaded_verification or {})
                 consensus = v.get("overall_consensus") or {}
                 episodes.append({
@@ -80,6 +95,8 @@ def create_app(default_repo: str | None = None, default_task: str | None = None)
                 })
         return render_template("index.html",
                                repo=repo, task=task_name,
+                               annotator=annotator_model,
+                               annotators_available=annotators_available,
                                episodes=episodes,
                                n_verified=n_verified,
                                rerunning=list(_RUNNING_RERUNS.keys()))
@@ -88,9 +105,12 @@ def create_app(default_repo: str | None = None, default_task: str | None = None)
     def episode(ep: int):
         repo = request.args.get("repo") or app.config["DEFAULT_REPO"]
         task_name = request.args.get("task") or app.config["DEFAULT_TASK"]
+        requested_annotator = request.args.get("annotator")
+        annotator_model = _resolve_annotator(repo, requested_annotator) if repo else DEFAULT_ANNOTATOR
+        annotators_available = list_annotators_for_repo(repo) if repo else []
         if not repo:
             return "missing ?repo=", 400
-        ann = json.loads(_annotation_path(repo, ep).read_text())
+        ann = json.loads(_annotation_path(repo, ep, annotator_model).read_text())
         ov = load_override(repo, ep)
         try:
             cams = LeRobotDataset(repo).cameras()
@@ -98,9 +118,9 @@ def create_app(default_repo: str | None = None, default_task: str | None = None)
             wrist_cams = [c for c in cams if c != head_cam]
         except Exception:
             head_cam, wrist_cams = None, []
-        loaded_verification = load_verification(repo, ep)
+        loaded_verification = load_verification(repo, ep, annotator_model)
         verification = loaded_verification or {}
-        verification_stale = bool(loaded_verification) and is_verification_stale(repo, ep)
+        verification_stale = bool(loaded_verification) and is_verification_stale(repo, ep, annotator_model)
         if verification_stale:
             verification = {**verification, "stale": True}
         # Build map: segment_index -> list of issues for inline display
@@ -117,6 +137,8 @@ def create_app(default_repo: str | None = None, default_task: str | None = None)
                         episode_issues.append(issue)
         return render_template("episode.html",
                                repo=repo, task=task_name, ep=ep,
+                               annotator=annotator_model,
+                               annotators_available=annotators_available,
                                ann=ann, override=ov.to_dict(),
                                head_cam=head_cam, wrist_cams=wrist_cams,
                                verification=verification,
@@ -125,9 +147,10 @@ def create_app(default_repo: str | None = None, default_task: str | None = None)
 
     @app.route("/api/episode/<int:ep>/save", methods=["POST"])
     def api_save(ep: int):
-        repo = request.json.get("repo") or app.config["DEFAULT_REPO"]
         body = request.json or {}
-        ann_path = _annotation_path(repo, ep)
+        repo = body.get("repo") or app.config["DEFAULT_REPO"]
+        annotator_model = _resolve_annotator(repo, body.get("annotator"))
+        ann_path = _annotation_path(repo, ep, annotator_model)
         ann = json.loads(ann_path.read_text())
 
         # Update segments inline if provided
@@ -160,11 +183,13 @@ def create_app(default_repo: str | None = None, default_task: str | None = None)
 
     @app.route("/api/episode/<int:ep>/approve", methods=["POST"])
     def api_approve(ep: int):
-        repo = (request.json or {}).get("repo") or app.config["DEFAULT_REPO"]
+        body = request.json or {}
+        repo = body.get("repo") or app.config["DEFAULT_REPO"]
+        annotator_model = _resolve_annotator(repo, body.get("annotator"))
         ov = load_override(repo, ep)
         ov.status = "verified"
         save_override(ov)
-        ann_path = _annotation_path(repo, ep)
+        ann_path = _annotation_path(repo, ep, annotator_model)
         ann = json.loads(ann_path.read_text())
         ann["status"] = "verified"
         ann_path.write_text(json.dumps(ann, indent=2))
@@ -183,7 +208,8 @@ def create_app(default_repo: str | None = None, default_task: str | None = None)
         body = request.json or {}
         repo = body.get("repo") or app.config["DEFAULT_REPO"]
         task_name = body.get("task") or app.config["DEFAULT_TASK"]
-        key = f"{repo}:{ep}"
+        annotator_model = _resolve_annotator(repo, body.get("annotator"))
+        key = f"{repo}:{ep}:{annotator_model}"
         if key in _RUNNING_RERUNS:
             return jsonify({"ok": False, "error": "already running"}), 409
 
@@ -191,9 +217,9 @@ def create_app(default_repo: str | None = None, default_task: str | None = None)
             try:
                 ds = LeRobotDataset(repo)
                 task = load_task(task_name)
-                annotate_episode(ds, task, ep, overwrite=True)
+                annotate_episode(ds, task, ep, overwrite=True, annotator_model=annotator_model)
             except Exception as e:
-                print(f"[rerun ep{ep}] FAIL: {e}")
+                print(f"[rerun ep{ep} {annotator_model}] FAIL: {e}")
             finally:
                 _RUNNING_RERUNS.pop(key, None)
         t = threading.Thread(target=_work, daemon=True)
@@ -223,8 +249,9 @@ def create_app(default_repo: str | None = None, default_task: str | None = None)
     def api_apply_corrections(ep: int):
         body = request.json or {}
         repo = body.get("repo") or app.config["DEFAULT_REPO"]
+        annotator_model = _resolve_annotator(repo, body.get("annotator"))
         try:
-            r = apply_episode_corrections(repo, ep)
+            r = apply_episode_corrections(repo, ep, annotator_model=annotator_model)
             return jsonify({"ok": True, **r})
         except Exception as e:
             return jsonify({"ok": False, "error": str(e)}), 500
@@ -234,7 +261,8 @@ def create_app(default_repo: str | None = None, default_task: str | None = None)
         body = request.json or {}
         repo = body.get("repo") or app.config["DEFAULT_REPO"]
         task_name = body.get("task") or app.config["DEFAULT_TASK"]
-        key = f"verify:{repo}:{ep}"
+        annotator_model = _resolve_annotator(repo, body.get("annotator"))
+        key = f"verify:{repo}:{ep}:{annotator_model}"
         if key in _RUNNING_RERUNS:
             return jsonify({"ok": False, "error": "already running"}), 409
 
@@ -242,9 +270,9 @@ def create_app(default_repo: str | None = None, default_task: str | None = None)
             try:
                 ds = LeRobotDataset(repo)
                 task = load_task(task_name) if task_name else None
-                verify_episode(ds, task, ep)
+                verify_episode(ds, task, ep, annotator_model=annotator_model)
             except Exception as e:
-                print(f"[verify ep{ep}] FAIL: {e}")
+                print(f"[verify ep{ep} {annotator_model}] FAIL: {e}")
             finally:
                 _RUNNING_RERUNS.pop(key, None)
         t = threading.Thread(target=_work, daemon=True)
@@ -264,9 +292,9 @@ def create_app(default_repo: str | None = None, default_task: str | None = None)
                 break
         return send_from_directory(d, filename)
 
-    @app.route("/img/success/<repo_safe>/<int:ep>/<filename>")
-    def success(repo_safe: str, ep: int, filename: str):
-        d = SUCCESS_STATES_DIR / repo_safe / f"episode_{ep:06d}"
+    @app.route("/img/success/<repo_safe>/<annotator>/<int:ep>/<filename>")
+    def success(repo_safe: str, annotator: str, ep: int, filename: str):
+        d = SUCCESS_STATES_DIR / repo_safe / annotator / f"episode_{ep:06d}"
         return send_from_directory(d, filename)
 
     @app.route("/video/<repo_safe>/<int:ep>/<cam>.mp4")

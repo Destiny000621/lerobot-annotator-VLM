@@ -21,6 +21,15 @@
     <div class="col-auto">
       <input class="form-control" name="task" placeholder="task (e.g. vial_place)" value="{{ task or '' }}">
     </div>
+    {% if annotators_available %}
+    <div class="col-auto">
+      <select class="form-select" name="annotator" onchange="this.form.submit()">
+        {% for m in annotators_available %}
+        <option value="{{ m }}" {% if m == annotator %}selected{% endif %}>{{ m }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    {% endif %}
     <div class="col-auto"><button class="btn btn-primary">Load</button></div>
   </form>
 
@@ -58,7 +67,7 @@
             {% endif %}
           </td>
           <td>
-            <a class="btn btn-sm btn-outline-primary" href="/episode/{{ e.ep }}?repo={{ repo }}&task={{ task or '' }}">Open</a>
+            <a class="btn btn-sm btn-outline-primary" href="/episode/{{ e.ep }}?repo={{ repo }}&task={{ task or '' }}&annotator={{ annotator }}">Open</a>
           </td>
         </tr>
       {% endfor %}

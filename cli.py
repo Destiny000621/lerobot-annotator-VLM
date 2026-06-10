@@ -65,7 +65,8 @@ def cmd_annotate(args) -> None:
 def cmd_materialize(args) -> None:
     ds = LeRobotDataset(args.repo)
     eps = _parse_episodes(args.episodes)
-    summary = materialize(ds, eps)
+    annotator_model = args.annotator or DEFAULT_ANNOTATOR
+    summary = materialize(ds, eps, annotator_model=annotator_model)
     print(json.dumps(summary, indent=2))
 
 
@@ -85,9 +86,10 @@ def cmd_clear_overrides(args) -> None:
 
 def cmd_apply_corrections(args) -> None:
     eps = _parse_episodes(args.episodes)
+    annotator_model = args.annotator or DEFAULT_ANNOTATOR
     for ep in eps:
         try:
-            r = apply_episode_corrections(args.repo, ep)
+            r = apply_episode_corrections(args.repo, ep, annotator_model=annotator_model)
             if r.get("no_corrections"):
                 a = r.get("applied", {}) or {}
                 print(f"[ep{ep:06d}] no new corrections to apply"
@@ -121,10 +123,11 @@ def cmd_verify(args) -> None:
     task = load_task(args.task) if args.task else None
     eps = _parse_episodes(args.episodes)
     models = args.models.split(",") if args.models else None
+    annotator_model = args.annotator or DEFAULT_ANNOTATOR
     for ep in eps:
         t0 = time.time()
         try:
-            result = verify_episode(ds, task, ep, models=models)
+            result = verify_episode(ds, task, ep, annotator_model=annotator_model, models=models)
             dt = time.time() - t0
             cons = result["overall_consensus"]
             print(f"[ep{ep:06d}] {cons['overall']:>13}  major={cons['n_major']} minor={cons['n_minor']} "
@@ -176,12 +179,16 @@ def main() -> None:
     mat = sub.add_parser("materialize", help="Emit LeRobot output tree from annotations")
     mat.add_argument("--repo", required=True)
     mat.add_argument("--episodes", required=True)
+    mat.add_argument("--annotator", default=None,
+                     help="Which annotator's outputs to materialize (default: DEFAULT_ANNOTATOR)")
     mat.set_defaults(func=cmd_materialize)
 
     apc = sub.add_parser("apply-corrections",
                           help="Apply structured corrections from AI verifier to annotations")
     apc.add_argument("--repo", required=True)
     apc.add_argument("--episodes", required=True)
+    apc.add_argument("--annotator", default=None,
+                     help="Which annotator's output to correct (default: DEFAULT_ANNOTATOR)")
     apc.set_defaults(func=cmd_apply_corrections)
 
     clr = sub.add_parser("clear-overrides",
@@ -198,6 +205,8 @@ def main() -> None:
     ver.add_argument("--repo", required=True)
     ver.add_argument("--task", default=None, help="Task name (for primitives list context)")
     ver.add_argument("--episodes", required=True)
+    ver.add_argument("--annotator", default=None,
+                     help="Which annotator's output to verify (default: DEFAULT_ANNOTATOR)")
     ver.add_argument("--models", default=None,
                      help="Comma-separated verifier model IDs (default: VERIFIER_MODELS)")
     ver.set_defaults(func=cmd_verify)

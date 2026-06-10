@@ -9,7 +9,7 @@ import json
 import re
 from pathlib import Path
 
-from .config import ANNOTATIONS_DIR, VERIFICATIONS_DIR, repo_safe_name
+from .config import DEFAULT_ANNOTATOR, annotation_dir, verification_dir
 from .overrides import Override, load as load_override, save as save_override
 from .verify import is_verification_stale
 
@@ -54,12 +54,12 @@ def _rewrite_progress_denominator(seg: dict, new_n: int) -> bool:
     return True
 
 
-def _annotation_path(repo_id: str, ep: int) -> Path:
-    return ANNOTATIONS_DIR / repo_safe_name(repo_id) / f"episode_{ep:06d}.json"
+def _annotation_path(repo_id: str, ep: int, annotator_model: str) -> Path:
+    return annotation_dir(repo_id, annotator_model) / f"episode_{ep:06d}.json"
 
 
-def _verification_path(repo_id: str, ep: int) -> Path:
-    return VERIFICATIONS_DIR / repo_safe_name(repo_id) / f"episode_{ep:06d}.json"
+def _verification_path(repo_id: str, ep: int, annotator_model: str) -> Path:
+    return verification_dir(repo_id, annotator_model) / f"episode_{ep:06d}.json"
 
 
 def _merge_corrections(verification: dict) -> dict:
@@ -85,18 +85,19 @@ def _merge_corrections(verification: dict) -> dict:
     return merged
 
 
-def apply_episode(repo_id: str, ep: int, also_pin_segments: bool = True) -> dict:
+def apply_episode(repo_id: str, ep: int, also_pin_segments: bool = True,
+                  annotator_model: str = DEFAULT_ANNOTATOR) -> dict:
     """Apply verifier corrections for one episode.
 
     Returns a summary dict {applied: {...}, no_corrections: bool}.
     """
-    ann_path = _annotation_path(repo_id, ep)
+    ann_path = _annotation_path(repo_id, ep, annotator_model)
     if not ann_path.exists():
         raise FileNotFoundError(f"no annotation at {ann_path}")
-    ver_path = _verification_path(repo_id, ep)
+    ver_path = _verification_path(repo_id, ep, annotator_model)
     if not ver_path.exists():
         raise FileNotFoundError(f"no verification at {ver_path} — run `cli.py verify` first")
-    if is_verification_stale(repo_id, ep):
+    if is_verification_stale(repo_id, ep, annotator_model):
         raise RuntimeError(
             f"verification at {ver_path} is stale for the current annotation — run `cli.py verify` again"
         )
@@ -209,11 +210,12 @@ def apply_episode(repo_id: str, ep: int, also_pin_segments: bool = True) -> dict
     return {"applied": applied, "no_corrections": False}
 
 
-def apply_batch(repo_id: str, episodes: list[int]) -> dict:
+def apply_batch(repo_id: str, episodes: list[int],
+                annotator_model: str = DEFAULT_ANNOTATOR) -> dict:
     out = {}
     for ep in episodes:
         try:
-            out[ep] = apply_episode(repo_id, ep)
+            out[ep] = apply_episode(repo_id, ep, annotator_model=annotator_model)
         except Exception as e:
             out[ep] = {"error": str(e)}
     return out

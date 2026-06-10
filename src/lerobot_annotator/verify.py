@@ -17,9 +17,9 @@ import json
 from pathlib import Path
 
 from .config import (
-    ANNOTATIONS_DIR, KEYFRAMES_CACHE, SUCCESS_STATES_DIR,
-    VERIFICATIONS_DIR, VERIFIER_MAX_FRAMES, VERIFIER_MODELS,
-    VERIFIER_USE_WRIST_CAMERAS, repo_safe_name,
+    DEFAULT_ANNOTATOR, KEYFRAMES_CACHE, SUCCESS_STATES_DIR,
+    VERIFIER_MAX_FRAMES, VERIFIER_MODELS, VERIFIER_USE_WRIST_CAMERAS,
+    annotation_dir, verification_dir, repo_safe_name,
 )
 from .dataset import LeRobotDataset
 from .extract import _video_path, extract_frame_at
@@ -135,12 +135,12 @@ and found NO arm/vial mismatches.
 """
 
 
-def _verification_path(repo_id: str, ep: int) -> Path:
-    return VERIFICATIONS_DIR / repo_safe_name(repo_id) / f"episode_{ep:06d}.json"
+def _verification_path(repo_id: str, ep: int, annotator_model: str) -> Path:
+    return verification_dir(repo_id, annotator_model) / f"episode_{ep:06d}.json"
 
 
-def _annotation_path(repo_id: str, ep: int) -> Path:
-    return ANNOTATIONS_DIR / repo_safe_name(repo_id) / f"episode_{ep:06d}.json"
+def _annotation_path(repo_id: str, ep: int, annotator_model: str) -> Path:
+    return annotation_dir(repo_id, annotator_model) / f"episode_{ep:06d}.json"
 
 
 def _annotation_fingerprint(path: Path) -> dict:
@@ -148,9 +148,9 @@ def _annotation_fingerprint(path: Path) -> dict:
     return {"sha256": hashlib.sha256(data).hexdigest(), "size": len(data)}
 
 
-def is_verification_stale(repo_id: str, ep: int) -> bool:
-    ann_path = _annotation_path(repo_id, ep)
-    ver_path = _verification_path(repo_id, ep)
+def is_verification_stale(repo_id: str, ep: int, annotator_model: str = DEFAULT_ANNOTATOR) -> bool:
+    ann_path = _annotation_path(repo_id, ep, annotator_model)
+    ver_path = _verification_path(repo_id, ep, annotator_model)
     if not ver_path.exists() or not ann_path.exists():
         return True
     try:
@@ -165,7 +165,8 @@ def is_verification_stale(repo_id: str, ep: int) -> bool:
 
 def _pick_frames(ann: dict, dataset: LeRobotDataset, ep: int,
                  max_frames: int = VERIFIER_MAX_FRAMES,
-                 use_wrists: bool = VERIFIER_USE_WRIST_CAMERAS) -> list[tuple[str, Path, dict]]:
+                 use_wrists: bool = VERIFIER_USE_WRIST_CAMERAS,
+                 annotator_model: str = DEFAULT_ANNOTATOR) -> list[tuple[str, Path, dict]]:
     """Pick the most informative camera frames. For grasp/insert/bimanual segments, attach
     head + left_wrist + right_wrist views at the same timestamp so arm/vial assignments are
     visible to the verifier.
@@ -197,7 +198,7 @@ def _pick_frames(ann: dict, dataset: LeRobotDataset, ep: int,
         img = extract_frame_at(vp, sec)
         if img is None:
             return None
-        out_dir = VERIFICATIONS_DIR / safe / f"episode_{ep:06d}" / "_verifier_frames" / cam
+        out_dir = verification_dir(dataset.repo_id, annotator_model) / f"episode_{ep:06d}" / "_verifier_frames" / cam
         out_dir.mkdir(parents=True, exist_ok=True)
         p = out_dir / f"t{sec:07.3f}.jpg"
         img.save(p, format="JPEG", quality=88)
@@ -302,16 +303,18 @@ def _build_user_text(ann: dict, task: Task | None) -> str:
 
 
 def verify_episode(dataset: LeRobotDataset, task: Task | None, ep: int,
+                   annotator_model: str = DEFAULT_ANNOTATOR,
                    models: list[str] | None = None,
                    max_frames: int = VERIFIER_MAX_FRAMES) -> dict:
     """Run all configured verifier models on this episode's existing annotation."""
-    ann_path = _annotation_path(dataset.repo_id, ep)
+    ann_path = _annotation_path(dataset.repo_id, ep, annotator_model)
     if not ann_path.exists():
         raise FileNotFoundError(f"no annotation found at {ann_path}")
     ann = json.loads(ann_path.read_text())
     ann_fingerprint = _annotation_fingerprint(ann_path)
 
-    images = _pick_frames(ann, dataset, ep, max_frames=max_frames)
+    images = _pick_frames(ann, dataset, ep, max_frames=max_frames,
+                          annotator_model=annotator_model)
     user_text = _build_user_text(ann, task)
     models = models or VERIFIER_MODELS
 
@@ -326,13 +329,14 @@ def verify_episode(dataset: LeRobotDataset, task: Task | None, ep: int,
     summary = {
         "repo_id": dataset.repo_id,
         "episode_index": ep,
+        "annotator_model": annotator_model,
         "annotation_fingerprint": ann_fingerprint,
         "n_frames_shown": len(images),
         "verifiers": results,
         "overall_consensus": _consensus(results),
     }
 
-    out = _verification_path(dataset.repo_id, ep)
+    out = _verification_path(dataset.repo_id, ep, annotator_model)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(summary, indent=2))
     return summary
@@ -352,8 +356,8 @@ def _consensus(results: dict[str, dict]) -> dict:
     return {"overall": overall, "n_major": total_major, "n_minor": total_minor}
 
 
-def load_verification(repo_id: str, ep: int) -> dict | None:
-    p = _verification_path(repo_id, ep)
+def load_verification(repo_id: str, ep: int, annotator_model: str = DEFAULT_ANNOTATOR) -> dict | None:
+    p = _verification_path(repo_id, ep, annotator_model)
     if not p.exists():
         return None
     return json.loads(p.read_text())

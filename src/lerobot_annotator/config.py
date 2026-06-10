@@ -53,6 +53,34 @@ def repo_safe_name(repo_id: str) -> str:
     return repo_id.replace("/", "__")
 
 
+def model_safe_name(model_id: str) -> str:
+    """Filesystem-safe form of a model ID (e.g. 'gpt-5.5' stays as-is)."""
+    return model_id.replace("/", "_")
+
+
+def annotation_dir(repo_id: str, annotator_model: str) -> "Path":
+    """annotations/<repo_safe>/<annotator>/"""
+    return ANNOTATIONS_DIR / repo_safe_name(repo_id) / model_safe_name(annotator_model)
+
+
+def verification_dir(repo_id: str, annotator_model: str) -> "Path":
+    """verifications/<repo_safe>/<annotator>/"""
+    return VERIFICATIONS_DIR / repo_safe_name(repo_id) / model_safe_name(annotator_model)
+
+
+def success_states_dir(repo_id: str, annotator_model: str) -> "Path":
+    """success_states/<repo_safe>/<annotator>/"""
+    return SUCCESS_STATES_DIR / repo_safe_name(repo_id) / model_safe_name(annotator_model)
+
+
+def list_annotators_for_repo(repo_id: str) -> list[str]:
+    """Discover which annotator subdirs already exist for a given repo."""
+    base = ANNOTATIONS_DIR / repo_safe_name(repo_id)
+    if not base.exists():
+        return []
+    return sorted(d.name for d in base.iterdir() if d.is_dir())
+
+
 def get_openai_key() -> str | None:
     """Reads $OPENAI_API_KEY then falls back to .secrets/openai_key.txt."""
     import os

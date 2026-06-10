@@ -17,7 +17,15 @@
 </style>
 </head>
 <body class="container py-4">
-  <a href="/?repo={{ repo }}&task={{ task or '' }}">&larr; back</a>
+  <a href="/?repo={{ repo }}&task={{ task or '' }}&annotator={{ annotator }}">&larr; back</a>
+  {% if annotators_available and annotators_available|length > 1 %}
+    <span class="ms-3 text-muted small">annotator:</span>
+    <select class="form-select form-select-sm d-inline-block" style="width:auto" onchange="window.location.href='/episode/{{ ep }}?repo={{ repo }}&task={{ task or '' }}&annotator=' + this.value">
+      {% for m in annotators_available %}
+        <option value="{{ m }}" {% if m == annotator %}selected{% endif %}>{{ m }}</option>
+      {% endfor %}
+    </select>
+  {% endif %}
   <h3>Episode {{ ep }}
     <span class="badge bg-secondary">{{ ann.duration_s|round(1) }}s</span>
     <span id="status-badge" class="badge {% if override.status == 'verified' %}bg-success{% elif override.status == 'needs_rework' %}bg-danger{% else %}bg-warning text-dark{% endif %}">{{ override.status }}</span>
@@ -134,7 +142,7 @@
         {% for seg in ann.segments %}
           {% if seg.get('success_frame_path') %}
             <div>
-              <img class="preview-thumb border" src="/img/success/{{ repo.replace('/','__') }}/{{ ep }}/{{ seg.success_frame_path.split('/')[-1] }}">
+              <img class="preview-thumb border" src="/img/success/{{ repo.replace('/','__') }}/{{ annotator }}/{{ ep }}/{{ seg.success_frame_path.split('/')[-1] }}">
               <div class="text-muted small">seg {{ loop.index0 }} ({{ seg.primitive }}{% if seg.vial_id %}, vial {{ seg.vial_id }}{% endif %})</div>
             </div>
           {% endif %}
@@ -208,6 +216,7 @@
 const REPO = {{ repo|tojson }};
 const REPO_SAFE = REPO.replaceAll('/', '__');
 const EP = {{ ep }};
+const ANNOTATOR = {{ annotator|tojson }};
 const DUR = {{ ann.duration_s|float }};
 
 function colorFor(prim) {
@@ -282,13 +291,13 @@ async function save(status=null) {
 document.getElementById('save-btn').onclick = () => save();
 document.getElementById('approve-btn').onclick = async () => {
   await save();
-  await fetch(`/api/episode/${EP}/approve`, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({repo: REPO})});
+  await fetch(`/api/episode/${EP}/approve`, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({repo: REPO, annotator: ANNOTATOR})});
   document.getElementById('status-text').textContent = 'verified ✓';
   document.getElementById('status-badge').className = 'badge bg-success';
   document.getElementById('status-badge').textContent = 'verified';
 };
 document.getElementById('reject-btn').onclick = async () => {
-  await fetch(`/api/episode/${EP}/reject`, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({repo: REPO})});
+  await fetch(`/api/episode/${EP}/reject`, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({repo: REPO, annotator: ANNOTATOR})});
   document.getElementById('status-badge').className = 'badge bg-danger';
   document.getElementById('status-badge').textContent = 'needs_rework';
 };
@@ -305,7 +314,7 @@ if (applyCorrBtn) {
     applyCorrBtn.textContent = '⏳ applying…';
     const r = await fetch(`/api/episode/${EP}/apply_corrections`, {
       method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({repo: REPO}),
+      body: JSON.stringify({repo: REPO, annotator: ANNOTATOR}),
     });
     const j = await r.json();
     if (j.ok && j.no_corrections) {
@@ -334,7 +343,7 @@ document.getElementById('reset-ov-btn').onclick = async () => {
   if (!confirm("Reset all pinned overrides for this episode (count, fields, segments, status)? Annotations on disk are not changed.")) return;
   const r = await fetch(`/api/episode/${EP}/reset_overrides`, {
     method: 'POST', headers: {'Content-Type':'application/json'},
-    body: JSON.stringify({repo: REPO}),
+    body: JSON.stringify({repo: REPO, annotator: ANNOTATOR}),
   });
   const j = await r.json();
   document.getElementById('status-text').textContent = j.ok

@@ -10,13 +10,15 @@ from pathlib import Path
 
 from .config import (
     ANNOTATIONS_DIR, KEYFRAMES_CACHE, OVERRIDES_DIR,
-    EXEMPLAR_INCLUDE_FIRST_FRAME, MAX_EXEMPLARS, PREFERRED_EXEMPLARS, repo_safe_name,
+    DEFAULT_ANNOTATOR, EXEMPLAR_INCLUDE_FIRST_FRAME, MAX_EXEMPLARS,
+    PREFERRED_EXEMPLARS, annotation_dir, list_annotators_for_repo, repo_safe_name,
 )
 
 
 # Fields we keep in an exemplar — drop everything else as noise.
 _TOP_KEEP = {
     "episode_index", "length", "duration_s", "fps",
+    "annotator_model",
     "total_vials", "stand_slots",
     "vial_descriptors", "pickup_sequence",
     "segments",
@@ -49,9 +51,25 @@ def find_verified(repo_id: str, exclude: set[int] | None = None) -> list[int]:
     return sorted(out, key=lambda ep: (0, rank[ep]) if ep in rank else (1, ep))
 
 
-def load_cleaned_annotation(repo_id: str, ep: int) -> dict | None:
-    p = ANNOTATIONS_DIR / repo_safe_name(repo_id) / f"episode_{ep:06d}.json"
-    if not p.exists():
+def load_cleaned_annotation(repo_id: str, ep: int,
+                            preferred_annotator: str | None = None) -> dict | None:
+    """Look up an episode's annotation across all annotator subdirs.
+
+    If `preferred_annotator` is given, try that subdir first. Otherwise scan in
+    sorted order and return the first match.
+    """
+    p: Path | None = None
+    if preferred_annotator:
+        cand = annotation_dir(repo_id, preferred_annotator) / f"episode_{ep:06d}.json"
+        if cand.exists():
+            p = cand
+    if p is None:
+        for model in list_annotators_for_repo(repo_id):
+            cand = annotation_dir(repo_id, model) / f"episode_{ep:06d}.json"
+            if cand.exists():
+                p = cand
+                break
+    if p is None:
         return None
     ann = json.loads(p.read_text())
     cleaned = {k: ann[k] for k in _TOP_KEEP if k in ann}
@@ -84,6 +102,7 @@ def build_exemplar_parts(
     limit: int | None = MAX_EXEMPLARS,
     target_count: int | None = None,
     explicit_episodes: list[int] | None = None,
+    preferred_annotator: str | None = None,
 ) -> tuple[list[dict], list[dict]]:
     """Return (parts, used_meta).
 
@@ -105,7 +124,7 @@ def build_exemplar_parts(
             same_count: list[int] = []
             other_count: list[int] = []
             for ep in candidates:
-                ann = load_cleaned_annotation(repo_id, ep)
+                ann = load_cleaned_annotation(repo_id, ep, preferred_annotator)
                 if ann and ann.get("total_vials") == target_count:
                     same_count.append(ep)
                 else:

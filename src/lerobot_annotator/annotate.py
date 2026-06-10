@@ -7,8 +7,9 @@ import av
 
 from . import annotators
 from .config import (
-    ANNOTATIONS_DIR, COUNT_VOTE_SAMPLES, DEFAULT_ANNOTATOR, MAX_ANNOTATE_ATTEMPTS,
-    MAX_IMAGES_PER_CALL, SUCCESS_STATES_DIR, VIDEO_CACHE, repo_safe_name,
+    COUNT_VOTE_SAMPLES, DEFAULT_ANNOTATOR, MAX_ANNOTATE_ATTEMPTS,
+    MAX_IMAGES_PER_CALL, SUCCESS_STATES_DIR, VIDEO_CACHE,
+    annotation_dir, success_states_dir,
 )
 from .dataset import LeRobotDataset
 from .exemplars import build_exemplar_parts
@@ -19,12 +20,12 @@ from .task import Task
 from .validate import validate
 
 
-def _annotation_path(repo_id: str, ep: int) -> Path:
-    return ANNOTATIONS_DIR / repo_safe_name(repo_id) / f"episode_{ep:06d}.json"
+def _annotation_path(repo_id: str, ep: int, annotator_model: str) -> Path:
+    return annotation_dir(repo_id, annotator_model) / f"episode_{ep:06d}.json"
 
 
-def _success_dir(repo_id: str, ep: int) -> Path:
-    return SUCCESS_STATES_DIR / repo_safe_name(repo_id) / f"episode_{ep:06d}"
+def _success_dir(repo_id: str, ep: int, annotator_model: str) -> Path:
+    return success_states_dir(repo_id, annotator_model) / f"episode_{ep:06d}"
 
 
 def _build_parts(task: Task, keyframes: dict[str, list[dict]], duration_s: float, fps: int,
@@ -91,10 +92,11 @@ def _build_parts(task: Task, keyframes: dict[str, list[dict]], duration_s: float
     return parts, sampling
 
 
-def _save_success_states(parsed: dict, dataset: LeRobotDataset, ep: int, task: Task) -> None:
+def _save_success_states(parsed: dict, dataset: LeRobotDataset, ep: int, task: Task,
+                          annotator_model: str) -> None:
     if not task.success_primitive:
         return
-    out_dir = _success_dir(dataset.repo_id, ep)
+    out_dir = _success_dir(dataset.repo_id, ep, annotator_model)
     if out_dir.exists():
         for old in out_dir.glob("*.jpg"):
             old.unlink()
@@ -131,7 +133,7 @@ def annotate_episode(
     exemplar_episodes: list[int] | None = None,
 ) -> dict:
     """Run the full annotation pipeline for one episode. Idempotent unless overwrite=True."""
-    out_path = _annotation_path(dataset.repo_id, episode_index)
+    out_path = _annotation_path(dataset.repo_id, episode_index, annotator_model)
     if out_path.exists() and not overwrite:
         return json.loads(out_path.read_text())
 
@@ -172,6 +174,7 @@ def annotate_episode(
         exemplar_parts, exemplar_meta = build_exemplar_parts(
             repo_id=dataset.repo_id, head_cam=head_cam, exclude_episode=episode_index,
             target_count=pinned_count, explicit_episodes=exemplar_episodes,
+            preferred_annotator=annotator_model,
         )
 
     # Each exemplar contributes one optional first-frame image plus text-only JSON. Keep
@@ -215,7 +218,7 @@ def annotate_episode(
     parsed["status"] = override.status
     parsed["_raw_text"] = raw_text
 
-    _save_success_states(parsed, dataset, episode_index, task)
+    _save_success_states(parsed, dataset, episode_index, task, annotator_model)
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps(parsed, indent=2))

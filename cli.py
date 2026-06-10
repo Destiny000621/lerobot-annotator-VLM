@@ -172,7 +172,9 @@ def main() -> None:
                           "e.g. '123,124,125'. Overrides automatic exemplar selection.")
     ann.add_argument("--annotator", default=None,
                      help="Annotator model ID (default: DEFAULT_ANNOTATOR in config.py). "
-                          "Examples: gemini-robotics-er-1.6-preview, gpt-5.5, gpt-5.5-pro, gpt-4o")
+                          "Examples: gemini-robotics-er-1.6-preview (Avant gateway), "
+                          "gpt-5.5, gpt-5.5-pro, gpt-4o (OpenAI), "
+                          "claude-opus-4-8, claude-opus-4-7 (Anthropic).")
     ann.add_argument("--reset-overrides", action="store_true",
                      help="Clear pinned_count/fields/segments BEFORE annotating. Use when "
                           "stale overrides from earlier runs are blocking a fresh count vote.")
@@ -210,7 +212,10 @@ def main() -> None:
     ver.add_argument("--annotator", default=None,
                      help="Which annotator's output to verify (default: DEFAULT_ANNOTATOR)")
     ver.add_argument("--models", default=None,
-                     help="Comma-separated verifier model IDs (default: VERIFIER_MODELS)")
+                     help="Comma-separated verifier model IDs (default: VERIFIER_MODELS). "
+                          "Examples: gpt-5.5, claude-opus-4-8, claude-opus-4-7, "
+                          "gemini-robotics-er-1.6-preview. Pass multiple for cross-model "
+                          "consensus, e.g. --models gpt-5.5,claude-opus-4-8")
     ver.set_defaults(func=cmd_verify)
 
     seq = sub.add_parser("set-pickup-sequence",

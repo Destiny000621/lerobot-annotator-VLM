@@ -39,3 +39,4 @@ def available() -> list[str]:
 # Import backends AFTER register/get are defined so they can self-register.
 from . import gemini  # noqa: F401,E402
 from . import openai_chat  # noqa: F401,E402
+from . import claude  # noqa: F401,E402

@@ -2,7 +2,7 @@
 
 VLM-driven sub-task annotator for [LeRobot](https://huggingface.co/lerobot) v3.0 datasets with human-in-the-loop verification.
 
-Decompose long-horizon robot manipulation episodes into per-frame language instructions for VLA SFT (e.g. pi0, pi0.5, OpenVLA). Powered by Google's Gemini Robotics-ER 1.6 via the Avant LiteLLM gateway. Generic across any LeRobot dataset and any manipulation task; task-specific behavior lives entirely in `tasks/*.yaml` or `tasks/*.py`.
+Decompose long-horizon robot manipulation episodes into per-frame language instructions for VLA SFT (e.g. pi0, pi0.5, OpenVLA). Pluggable VLM backends — **Google Gemini Robotics-ER 1.6** (via the Avant LiteLLM gateway), **OpenAI GPT-5.5 / GPT-4o**, and **Anthropic Claude Opus 4.7 / 4.8** — usable interchangeably on both the annotator and verifier surfaces. Generic across any LeRobot dataset and any manipulation task; task-specific behavior lives entirely in `tasks/*.yaml` or `tasks/*.py`.
 
 ---
 
@@ -17,7 +17,7 @@ For each annotated episode you get:
    - Contiguous segments with `start_s`, `end_s`, primitive (`approach`/`grasp`/`transport`/`align`/`insert`/`retract`/`idle`), arm, object_id, natural-language instruction, and progress `k/N`
    - Success-state JPEGs at the end of each "success" primitive (e.g. `insert`)
 2. **AI-verifier reports** (`verifications/<repo>/episode_XXXXXX.json`):
-   - One or more external models (GPT-5.5, Gemini, etc.) cross-check the VLM output by looking
+   - One or more external models (GPT-5.5, Claude Opus 4.7/4.8, Gemini, etc.) cross-check the VLM output by looking
      at head + left_wrist + right_wrist camera frames at each grasp/insert moment
    - Output schema: `{overall, issues[{segment_index, type, severity, description}], summary}`
 3. **Per-frame `task_index`** in a regenerated LeRobot data parquet
@@ -45,13 +45,15 @@ For each annotated episode you get:
 │   │     2. count-vote on first + final frame                 │
 │   │        (5 samples → majority, occlusion-robust)          │
 │   │     3. inject up to 3 verified-episode exemplars         │
-│   │     4. call selected annotator backend (Gemini/GPT-5.5)  │
+│   │     4. call selected annotator backend                   │
+│   │        (Gemini / GPT-5.5 / Claude Opus 4.7-4.8)          │
 │   │     5. validate + retry on failure                       │
 │   │     6. apply human overrides post-call                   │
 │   │     7. save success-state JPEGs                          │
 │   │                                                           │
 │   ├─ Verifier (verify.py + verifiers/)                       │
-│   │   ↳ pluggable backends: gpt5 (OpenAI), gateway_gemini    │
+│   │   ↳ pluggable backends: gpt5 (OpenAI), claude            │
+│   │     (Anthropic), gateway_gemini (Avant)                  │
 │   │   ↳ sends head + left_wrist + right_wrist views at every │
 │   │     grasp/insert; aggressive cross-arm consistency prompt │
 │   │   ↳ writes issue list to verifications/<repo>/ep_*.json  │
@@ -111,7 +113,17 @@ echo "sk-proj-..." > .secrets/openai_key.txt
 chmod 600 .secrets/openai_key.txt
 ```
 
-`.secrets/` is in `.gitignore`, so keys never get committed. The code reads env vars first, then falls back to the files. The LiteLLM key is loaded lazily — if you only run OpenAI-backed annotators/verifiers, you don't need to set it.
+**Anthropic key** (required if you use `claude-opus-4-8` / `claude-opus-4-7` on either surface):
+
+```bash
+# Option A — shell environment:
+export ANTHROPIC_API_KEY=sk-ant-api03-...
+# Option B — gitignored file:
+echo "sk-ant-api03-..." > .secrets/anthropic_key.txt
+chmod 600 .secrets/anthropic_key.txt
+```
+
+`.secrets/` is in `.gitignore`, so keys never get committed. The code reads env vars first, then falls back to the files. All three keys are loaded lazily — only set the ones whose backends you actually call.
 
 ---
 
@@ -181,6 +193,7 @@ annotate --repo <repo_id> --task <task_name_or_path> --episodes <spec>
   Other registered options:
   - **OpenAI** (require `OPENAI_API_KEY`): `gpt-5.5`, `gpt-5.5-pro`, `gpt-5.4`, `gpt-5.4-pro`,
     `gpt-5.3-chat-latest`, `gpt-5.2`, `gpt-5.1`, `gpt-5`, `gpt-4o`, `gpt-4.1`
+  - **Anthropic** (require `ANTHROPIC_API_KEY`): `claude-opus-4-8`, `claude-opus-4-7`
   - **Avant gateway**: `gemini-robotics-er-1.6-preview`
 
   Cost / quality tradeoff observed on the vial-placement pilot:
@@ -190,20 +203,22 @@ annotate --repo <repo_id> --task <task_name_or_path> --episodes <spec>
   | `gemini-robotics-er-1.6-preview` | ~30s | ≈ $0 (gateway) | Often gets arm assignments wrong; verifier+apply-corrections fixes them |
   | `gpt-5.5` | ~90s | ≈ $0.20 (OpenAI) | Usually correct on first attempt for arm assignments |
   | `gpt-5.5-pro` | slower, more expensive | higher | Highest quality; reserve for problem episodes |
+  | `claude-opus-4-7` | ~60–90s | ≈ $0.15–$0.30 (Anthropic; $5/$25 per MTok) | Strong scene reasoning with adaptive thinking; comparable to `gpt-5.5` |
+  | `claude-opus-4-8` | ~60–90s | ≈ $0.15–$0.30 (Anthropic; $5/$25 per MTok) | Current best Claude — clearer prose + better long-horizon coherence than 4.7; same surface as 4.7 |
 
-  Recommended: use the cheap `gemini-robotics-er-1.6-preview` for bulk first-pass annotation, then re-annotate the residual problem episodes with `gpt-5.5` instead of relying purely on `verify → apply-corrections`.
+  Recommended: use the cheap `gemini-robotics-er-1.6-preview` for bulk first-pass annotation, then re-annotate the residual problem episodes with `gpt-5.5` or `claude-opus-4-8` instead of relying purely on `verify → apply-corrections`. Run a small head-to-head on 2–3 episodes to pick the strong-model that performs best on your task — `claude-opus-4-8` and `gpt-5.5` have different failure modes and the right pick is task-dependent.
 
 ### `verify`
 Runs one or more AI verifier models over existing annotations and writes their flagged issues to `verifications/<repo>/episode_XXXXXX.json`.
 
 ```
 verify --repo <repo_id> [--task <task>] --episodes <spec>
-       [--models gpt-5.5,gemini-robotics-er-1.6-preview]
+       [--models gpt-5.5,claude-opus-4-8,gemini-robotics-er-1.6-preview]
 ```
 
 - `--repo`, `--episodes` — same as `annotate`
 - `--task` — optional; passed to the verifier prompt as primitives context
-- `--models` — comma-separated verifier model IDs. Default: `VERIFIER_MODELS` from `config.py` (defaults to `["gpt-5.5"]`)
+- `--models` — comma-separated verifier model IDs. Default: `VERIFIER_MODELS` from `config.py` (defaults to `["gpt-5.5"]`). Pass multiple to run cross-model consensus (e.g. `--models gpt-5.5,claude-opus-4-8` — disagreement between strong models is a useful signal that the segment really is ambiguous and worth a human look)
 
 The verifier sends head + left_wrist + right_wrist views at every grasp/insert moment and at suspicious bimanual/null-vial action segments (~18 frames per episode), then applies an aggressive cross-arm consistency prompt. Issues are surfaced in the web UI as red-bordered segments with inline descriptions. The verifier ALSO emits a structured `corrections` field with deterministic edits the next command can apply. Stale verifier results are ignored after annotation edits; run `verify` again before applying corrections.
 
@@ -479,7 +494,7 @@ VLMs make mistakes that humans only catch by carefully watching the video — mo
 ### Pipeline
 
 ```
-annotation JSON (from Gemini-ER) ──┐
+annotation JSON (from any backend) ──┐
                                    ▼
               ┌────────────────────────────────────┐
               │ pick frames (verify.py)            │
@@ -557,9 +572,10 @@ Severity is `major` (semantically changes the policy's behavior) or `minor` (tim
 ### Pluggable backends (`src/lerobot_annotator/verifiers/`)
 
 - **`gpt5.py`** — OpenAI Chat Completions. Registers: `gpt-5.5`, `gpt-5.5-pro`, `gpt-5.4`, `gpt-5.4-pro`, `gpt-5.3-chat-latest`, `gpt-5.2`, `gpt-5.1`, `gpt-5`, `gpt-4o`, `gpt-4.1`. Reads `$OPENAI_API_KEY` or `.secrets/openai_key.txt`.
+- **`claude.py`** — Anthropic SDK (streaming + adaptive thinking + `effort: "high"`). Registers: `claude-opus-4-8`, `claude-opus-4-7`. Reads `$ANTHROPIC_API_KEY` or `.secrets/anthropic_key.txt`.
 - **`gateway_gemini.py`** — Avant LiteLLM gateway. Registers: `gemini-robotics-er-1.6-preview`. Uses the same gateway key as `annotate`.
 
-Adding a new model later (e.g. Claude when gateway access lights up) is a 5-line `register("claude-opus-4-7-max", lambda ...: ...)` addition.
+Adding a new model later is a 5-line `register("model-id", lambda ...: ...)` addition in the relevant backend file.
 
 ### Tuning
 
@@ -655,7 +671,8 @@ EXEMPLAR_INCLUDE_FIRST_FRAME = True
 VERIFIER_MODELS              = ["gpt-5.5"]      # comma-separable list
 VERIFIER_MAX_FRAMES          = 18               # head + wrist frames per call
 VERIFIER_USE_WRIST_CAMERAS   = True
-VERIFIER_OPENAI_MAX_EDGE     = None             # None = original 640×480 to OpenAI
+VERIFIER_OPENAI_MAX_EDGE     = None             # max JPEG edge sent to OpenAI / Anthropic
+                                                # backends; None = original 640×480
 
 FLASK_PORT = 5050
 ```
@@ -666,8 +683,9 @@ Each per-(repo, episode) artifact is stored under `<dir>/<repo_safe>/episode_XXX
 
 | Key | Lookup order | Used for |
 |---|---|---|
-| `LITELLM_API_KEY` | hardcoded in `config.py` (move to env if shipping) | Gemini-ER annotation + Gemini verifier backend |
-| `OPENAI_API_KEY` | `$OPENAI_API_KEY` → `.secrets/openai_key.txt` (mode 600) | OpenAI verifier backend (gpt-5.5 etc.) |
+| `LITELLM_API_KEY` | `$LITELLM_API_KEY` → `.secrets/litellm_key.txt` (mode 600) | Gemini-ER annotator + Gemini verifier backend |
+| `OPENAI_API_KEY` | `$OPENAI_API_KEY` → `.secrets/openai_key.txt` (mode 600) | OpenAI annotator + verifier backends (`gpt-5.5` etc.) |
+| `ANTHROPIC_API_KEY` | `$ANTHROPIC_API_KEY` → `.secrets/anthropic_key.txt` (mode 600) | Claude annotator + verifier backends (`claude-opus-4-8`, `claude-opus-4-7`) |
 
 ---
 
@@ -784,6 +802,8 @@ No code changes are required for new tasks. The dataset loader handles any v3.0 
 ## Acknowledgments
 
 - Dataset format: [LeRobot](https://huggingface.co/lerobot) v3.0
-- VLM annotator: [Gemini Robotics-ER 1.6](https://blog.google/technology/google-deepmind/gemini-robotics/) via the Avant LiteLLM gateway
-- AI verifier: OpenAI GPT-5.5 (Chat Completions API)
+- VLM backends (interchangeable across both annotator and verifier):
+  - [Google Gemini Robotics-ER 1.6](https://blog.google/technology/google-deepmind/gemini-robotics/) via the Avant LiteLLM gateway
+  - [OpenAI GPT-5.5 / GPT-4o](https://platform.openai.com/) via the OpenAI Chat Completions API
+  - [Anthropic Claude Opus 4.7 / 4.8](https://www.anthropic.com/claude) via the official Anthropic Python SDK
 - Target policy family: [Physical Intelligence pi0 / pi0.5](https://www.physicalintelligence.company/blog/pi0)

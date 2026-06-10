@@ -24,3 +24,4 @@ def available() -> list[str]:
 # Import backends AFTER register() is defined so they can self-register.
 from . import gpt5  # noqa: F401,E402
 from . import gateway_gemini  # noqa: F401,E402
+from . import claude  # noqa: F401,E402

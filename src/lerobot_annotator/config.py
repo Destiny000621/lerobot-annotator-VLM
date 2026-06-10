@@ -106,6 +106,18 @@ def get_openai_key() -> str | None:
     return None
 
 
+def get_anthropic_key() -> str | None:
+    """Reads $ANTHROPIC_API_KEY then falls back to .secrets/anthropic_key.txt."""
+    import os
+    env = os.environ.get("ANTHROPIC_API_KEY")
+    if env:
+        return env.strip()
+    p = SECRETS_DIR / "anthropic_key.txt"
+    if p.exists():
+        return p.read_text().strip()
+    return None
+
+
 def get_litellm_key() -> str:
     """Reads $LITELLM_API_KEY then falls back to .secrets/litellm_key.txt.
 

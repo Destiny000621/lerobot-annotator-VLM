@@ -11,7 +11,8 @@ from pathlib import Path
 from .config import (
     ANNOTATIONS_DIR, KEYFRAMES_CACHE, OVERRIDES_DIR,
     DEFAULT_ANNOTATOR, EXEMPLAR_INCLUDE_FIRST_FRAME, MAX_EXEMPLARS,
-    PREFERRED_EXEMPLARS, annotation_dir, list_annotators_for_repo, repo_safe_name,
+    PREFERRED_EXEMPLARS, annotation_dir, human_verified_dir, list_annotators_for_repo,
+    repo_safe_name,
 )
 
 
@@ -53,13 +54,18 @@ def find_verified(repo_id: str, exclude: set[int] | None = None) -> list[int]:
 
 def load_cleaned_annotation(repo_id: str, ep: int,
                             preferred_annotator: str | None = None) -> dict | None:
-    """Look up an episode's annotation across all annotator subdirs.
+    """Look up an episode's annotation, preferring the human_verified snapshot.
 
-    If `preferred_annotator` is given, try that subdir first. Otherwise scan in
-    sorted order and return the first match.
+    Resolution order:
+      1. annotations/<repo>/human_verified/episode_*.json  (canonical ground truth)
+      2. annotations/<repo>/<preferred_annotator>/episode_*.json (if provided)
+      3. annotations/<repo>/<any annotator subdir>/episode_*.json (first match)
     """
     p: Path | None = None
-    if preferred_annotator:
+    hv = human_verified_dir(repo_id) / f"episode_{ep:06d}.json"
+    if hv.exists():
+        p = hv
+    if p is None and preferred_annotator:
         cand = annotation_dir(repo_id, preferred_annotator) / f"episode_{ep:06d}.json"
         if cand.exists():
             p = cand

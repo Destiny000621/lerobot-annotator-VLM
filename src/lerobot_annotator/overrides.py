@@ -11,7 +11,9 @@ from dataclasses import dataclass, field, asdict
 import json
 from pathlib import Path
 
-from .config import OVERRIDES_DIR, repo_safe_name
+import shutil
+
+from .config import OVERRIDES_DIR, annotation_dir, human_verified_dir, repo_safe_name
 
 
 @dataclass
@@ -80,3 +82,24 @@ def apply_post_call(parsed: dict, ov: Override) -> dict:
     if ov.pinned_segments is not None:
         parsed["segments"] = ov.pinned_segments
     return parsed
+
+
+def sync_human_verified(repo_id: str, ep: int, annotator_model: str, status: str) -> Path | None:
+    """Mirror the current annotation into annotations/<repo>/human_verified/ when status flips
+    to "verified". Remove the snapshot when status moves away from "verified".
+
+    Returns the path of the snapshot when copied/removed, else None.
+    """
+    target = human_verified_dir(repo_id) / f"episode_{ep:06d}.json"
+    if status == "verified":
+        source = annotation_dir(repo_id, annotator_model) / f"episode_{ep:06d}.json"
+        if not source.exists():
+            return None
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy(source, target)
+        return target
+    # status moved off "verified"
+    if target.exists():
+        target.unlink()
+        return target
+    return None

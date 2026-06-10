@@ -16,7 +16,10 @@ from .dataset import LeRobotDataset
 from .annotate import annotate_episode
 from .extract import _video_path
 from .apply_corrections import apply_episode as apply_episode_corrections
-from .overrides import Override, clear as clear_override, load as load_override, save as save_override
+from .overrides import (
+    Override, clear as clear_override, load as load_override, save as save_override,
+    sync_human_verified,
+)
 from .task import load as load_task
 from .verify import is_verification_stale, load_verification, verify_episode
 
@@ -179,6 +182,8 @@ def create_app(default_repo: str | None = None, default_task: str | None = None)
         if "status" in body:
             ov.status = body["status"]
         save_override(ov)
+        if "status" in body:
+            sync_human_verified(repo, ep, annotator_model, ov.status)
         return jsonify({"ok": True, "status": ov.status})
 
     @app.route("/api/episode/<int:ep>/approve", methods=["POST"])
@@ -193,14 +198,18 @@ def create_app(default_repo: str | None = None, default_task: str | None = None)
         ann = json.loads(ann_path.read_text())
         ann["status"] = "verified"
         ann_path.write_text(json.dumps(ann, indent=2))
+        sync_human_verified(repo, ep, annotator_model, "verified")
         return jsonify({"ok": True})
 
     @app.route("/api/episode/<int:ep>/reject", methods=["POST"])
     def api_reject(ep: int):
-        repo = (request.json or {}).get("repo") or app.config["DEFAULT_REPO"]
+        body = request.json or {}
+        repo = body.get("repo") or app.config["DEFAULT_REPO"]
+        annotator_model = _resolve_annotator(repo, body.get("annotator"))
         ov = load_override(repo, ep)
         ov.status = "needs_rework"
         save_override(ov)
+        sync_human_verified(repo, ep, annotator_model, "needs_rework")
         return jsonify({"ok": True})
 
     @app.route("/api/episode/<int:ep>/rerun", methods=["POST"])

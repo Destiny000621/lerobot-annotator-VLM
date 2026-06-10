@@ -73,12 +73,25 @@ def success_states_dir(repo_id: str, annotator_model: str) -> "Path":
     return SUCCESS_STATES_DIR / repo_safe_name(repo_id) / model_safe_name(annotator_model)
 
 
+HUMAN_VERIFIED_SUBDIR = "human_verified"
+
+
+def human_verified_dir(repo_id: str) -> "Path":
+    """annotations/<repo_safe>/human_verified/ — snapshot of human-approved annotations."""
+    return ANNOTATIONS_DIR / repo_safe_name(repo_id) / HUMAN_VERIFIED_SUBDIR
+
+
 def list_annotators_for_repo(repo_id: str) -> list[str]:
-    """Discover which annotator subdirs already exist for a given repo."""
+    """Discover which annotator subdirs already exist for a given repo.
+
+    Excludes the special `human_verified` mirror — that's not an annotator, it's a
+    snapshot of verified annotations regardless of producer.
+    """
     base = ANNOTATIONS_DIR / repo_safe_name(repo_id)
     if not base.exists():
         return []
-    return sorted(d.name for d in base.iterdir() if d.is_dir())
+    return sorted(d.name for d in base.iterdir()
+                  if d.is_dir() and d.name != HUMAN_VERIFIED_SUBDIR)
 
 
 def get_openai_key() -> str | None:

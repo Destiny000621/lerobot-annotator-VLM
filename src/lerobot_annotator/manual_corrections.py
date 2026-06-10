@@ -5,15 +5,15 @@ import json
 import re
 from pathlib import Path
 
-from .config import ANNOTATIONS_DIR, SUCCESS_STATES_DIR, repo_safe_name
-from .overrides import load as load_override, save as save_override
+from .config import DEFAULT_ANNOTATOR, SUCCESS_STATES_DIR, annotation_dir
+from .overrides import load as load_override, save as save_override, sync_human_verified
 
 
 OBJECT_PRIMITIVES = {"approach", "grasp", "transport", "align", "insert"}
 
 
-def _annotation_path(repo_id: str, ep: int) -> Path:
-    return ANNOTATIONS_DIR / repo_safe_name(repo_id) / f"episode_{ep:06d}.json"
+def _annotation_path(repo_id: str, ep: int, annotator_model: str) -> Path:
+    return annotation_dir(repo_id, annotator_model) / f"episode_{ep:06d}.json"
 
 
 def _rewrite_instruction(seg: dict, descriptor: str, vial_id: int) -> str:
@@ -68,6 +68,7 @@ def apply_pickup_sequence(
     *,
     status: str | None = None,
     pin_segments: bool = True,
+    annotator_model: str = DEFAULT_ANNOTATOR,
 ) -> dict:
     """Apply a human-provided sequential pickup order to one-vial action blocks.
 
@@ -75,7 +76,7 @@ def apply_pickup_sequence(
     starts with `k/`. This matches the vial_place convention that progress is the
     number of completed insertions before the segment begins.
     """
-    ann_path = _annotation_path(repo_id, ep)
+    ann_path = _annotation_path(repo_id, ep, annotator_model)
     if not ann_path.exists():
         raise FileNotFoundError(f"no annotation at {ann_path}")
     ann = json.loads(ann_path.read_text())
@@ -145,4 +146,6 @@ def apply_pickup_sequence(
     if status is not None:
         override.status = status
     save_override(override)
+    if status is not None:
+        sync_human_verified(repo_id, ep, annotator_model, override.status)
     return applied

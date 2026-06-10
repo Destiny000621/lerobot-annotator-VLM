@@ -138,12 +138,14 @@ def cmd_verify(args) -> None:
 
 def cmd_set_pickup_sequence(args) -> None:
     sequence = [int(x.strip()) for x in args.sequence.split(",") if x.strip()]
+    annotator_model = args.annotator or DEFAULT_ANNOTATOR
     applied = apply_pickup_sequence(
         args.repo,
         args.episode,
         sequence,
         status=args.status,
         pin_segments=not args.no_pin_segments,
+        annotator_model=annotator_model,
     )
     print(json.dumps(applied, indent=2))
 
@@ -220,6 +222,8 @@ def main() -> None:
                      help="Optional status to write to annotation and override")
     seq.add_argument("--no-pin-segments", action="store_true",
                      help="Only write pickup_sequence; do not pin rewritten segments")
+    seq.add_argument("--annotator", default=None,
+                     help="Which annotator's annotation to patch (default: DEFAULT_ANNOTATOR)")
     seq.set_defaults(func=cmd_set_pickup_sequence)
 
     srv = sub.add_parser("serve", help="Launch the HITL web app")

@@ -223,12 +223,15 @@ def create_app(default_repo: str | None = None, default_task: str | None = None)
             return jsonify({"ok": False, "error": "already running"}), 409
 
         def _work():
+            import time as _t
+            t0 = _t.time()
             try:
                 ds = LeRobotDataset(repo)
                 task = load_task(task_name)
                 annotate_episode(ds, task, ep, overwrite=True, annotator_model=annotator_model)
+                print(f"[rerun ep{ep} {annotator_model}] DONE ({_t.time()-t0:.1f}s)", flush=True)
             except Exception as e:
-                print(f"[rerun ep{ep} {annotator_model}] FAIL: {e}")
+                print(f"[rerun ep{ep} {annotator_model}] FAIL ({_t.time()-t0:.1f}s): {e}", flush=True)
             finally:
                 _RUNNING_RERUNS.pop(key, None)
         t = threading.Thread(target=_work, daemon=True)
@@ -239,9 +242,12 @@ def create_app(default_repo: str | None = None, default_task: str | None = None)
     @app.route("/api/episode/<int:ep>/status")
     def api_status(ep: int):
         repo = request.args.get("repo") or app.config["DEFAULT_REPO"]
-        key = f"{repo}:{ep}"
-        return jsonify({"rerunning": key in _RUNNING_RERUNS,
-                        "verifying": f"verify:{key}" in _RUNNING_RERUNS})
+        annotator_model = _resolve_annotator(repo, request.args.get("annotator"))
+        rerun_key = f"{repo}:{ep}:{annotator_model}"
+        verify_key = f"verify:{repo}:{ep}:{annotator_model}"
+        return jsonify({"rerunning": rerun_key in _RUNNING_RERUNS,
+                        "verifying": verify_key in _RUNNING_RERUNS,
+                        "annotator": annotator_model})
 
     @app.route("/api/episode/<int:ep>/reset_overrides", methods=["POST"])
     def api_reset_overrides(ep: int):
@@ -276,12 +282,15 @@ def create_app(default_repo: str | None = None, default_task: str | None = None)
             return jsonify({"ok": False, "error": "already running"}), 409
 
         def _work():
+            import time as _t
+            t0 = _t.time()
             try:
                 ds = LeRobotDataset(repo)
                 task = load_task(task_name) if task_name else None
                 verify_episode(ds, task, ep, annotator_model=annotator_model)
+                print(f"[verify ep{ep} {annotator_model}] DONE ({_t.time()-t0:.1f}s)", flush=True)
             except Exception as e:
-                print(f"[verify ep{ep} {annotator_model}] FAIL: {e}")
+                print(f"[verify ep{ep} {annotator_model}] FAIL ({_t.time()-t0:.1f}s): {e}", flush=True)
             finally:
                 _RUNNING_RERUNS.pop(key, None)
         t = threading.Thread(target=_work, daemon=True)

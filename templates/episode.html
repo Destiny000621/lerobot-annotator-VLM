@@ -301,10 +301,38 @@ document.getElementById('reject-btn').onclick = async () => {
   document.getElementById('status-badge').className = 'badge bg-danger';
   document.getElementById('status-badge').textContent = 'needs_rework';
 };
+async function pollUntilDone(field, label, intervalMs = 5000) {
+  const url = `/api/episode/${EP}/status?repo=${encodeURIComponent(REPO)}&annotator=${encodeURIComponent(ANNOTATOR)}`;
+  const start = Date.now();
+  while (true) {
+    await new Promise(r => setTimeout(r, intervalMs));
+    let j;
+    try {
+      const r = await fetch(url);
+      j = await r.json();
+    } catch (e) {
+      continue;
+    }
+    const elapsed = ((Date.now() - start) / 1000).toFixed(0);
+    if (!j[field]) {
+      document.getElementById('status-text').textContent = `${label} finished after ${elapsed}s — reloading…`;
+      setTimeout(() => location.reload(), 600);
+      return;
+    }
+    document.getElementById('status-text').textContent = `${label} running in background… (${elapsed}s)`;
+  }
+}
+
 document.getElementById('rerun-btn').onclick = async () => {
   await save();
-  await fetch(`/api/episode/${EP}/rerun`, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({repo: REPO, task: {{ (task or 'vial_place')|tojson }}})});
-  document.getElementById('status-text').textContent = 're-annotation started in background — refresh page in ~30s';
+  const r = await fetch(`/api/episode/${EP}/rerun`, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({repo: REPO, task: {{ (task or 'vial_place')|tojson }}, annotator: ANNOTATOR})});
+  const j = await r.json();
+  if (!j.ok) {
+    document.getElementById('status-text').textContent = 'error: ' + JSON.stringify(j);
+    return;
+  }
+  document.getElementById('status-text').textContent = 're-annotation running in background…';
+  pollUntilDone('rerunning', 'Re-annotation');
 };
 
 const applyCorrBtn = document.getElementById('apply-corr-btn');
@@ -355,12 +383,28 @@ document.getElementById('run-verify-btn').onclick = async () => {
   const btn = document.getElementById('run-verify-btn');
   btn.disabled = true;
   btn.textContent = '⏳ running AI verifier…';
-  const r = await fetch(`/api/episode/${EP}/verify`, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({repo: REPO, task: {{ (task or 'vial_place')|tojson }}})});
+  const r = await fetch(`/api/episode/${EP}/verify`, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({repo: REPO, task: {{ (task or 'vial_place')|tojson }}, annotator: ANNOTATOR})});
   const j = await r.json();
-  document.getElementById('status-text').textContent = j.ok
-    ? 'AI verifier running in background (~2min) — refresh to see results'
-    : ('error: ' + JSON.stringify(j));
+  if (!j.ok) {
+    document.getElementById('status-text').textContent = 'error: ' + JSON.stringify(j);
+    btn.disabled = false;
+    btn.textContent = '↻ Run AI verifier';
+    return;
+  }
+  document.getElementById('status-text').textContent = 'AI verifier running in background…';
+  pollUntilDone('verifying', 'AI verifier');
 };
+
+// If the page was loaded while a job is already running (e.g. user clicked then
+// switched tabs and came back), start polling so they still get the auto-reload.
+(async () => {
+  try {
+    const r = await fetch(`/api/episode/${EP}/status?repo=${encodeURIComponent(REPO)}&annotator=${encodeURIComponent(ANNOTATOR)}`);
+    const j = await r.json();
+    if (j.verifying) pollUntilDone('verifying', 'AI verifier');
+    else if (j.rerunning) pollUntilDone('rerunning', 'Re-annotation');
+  } catch (e) {}
+})();
 
 document.getElementById('add-seg').onclick = () => {
   const segs = document.getElementById('segments');

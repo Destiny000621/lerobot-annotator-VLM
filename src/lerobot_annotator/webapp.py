@@ -100,7 +100,11 @@ def create_app(default_repo: str | None = None, default_task: str | None = None)
             for ep in _list_annotated_episodes(repo, annotator_model):
                 ann = json.loads(_annotation_path(repo, ep, annotator_model).read_text())
                 ov = load_override(repo, ep)
-                if ov.status == "verified":
+                # Status is per-(annotator, episode): read it from the annotation
+                # file, not the model-agnostic override. Approving ep N under
+                # annotator A should not flip the badge under annotator B.
+                ann_status = ann.get("status") or "draft"
+                if ann_status == "verified":
                     n_verified += 1
                 loaded_verification = load_verification(repo, ep, annotator_model)
                 stale = bool(loaded_verification) and is_verification_stale(repo, ep, annotator_model)
@@ -110,7 +114,7 @@ def create_app(default_repo: str | None = None, default_task: str | None = None)
                     "ep": ep,
                     "n_segments": len(ann.get("segments", [])),
                     "count_field": (ann.get("count_resolution") or {}).get("count"),
-                    "status": ov.status,
+                    "status": ann_status,
                     "duration_s": round(ann.get("duration_s", 0), 1),
                     "attempts": len(ann.get("attempts", [])),
                     "n_exemplars": len(ann.get("exemplars_used", [])),
@@ -161,11 +165,17 @@ def create_app(default_repo: str | None = None, default_task: str | None = None)
                         seg_issues.setdefault(si, []).append(issue)
                     else:
                         episode_issues.append(issue)
+        # Override is shared across annotators (pinned_count is a fact about the
+        # episode, not the model), but `status` must be per-(annotator, episode).
+        # Pass the annotation's status into the template's `override` dict so the
+        # status badge reflects this annotator's approval state, not the shared
+        # override's stale flag from whichever annotator approved last.
+        override_view = {**ov.to_dict(), "status": ann.get("status") or "draft"}
         return render_template("episode.html",
                                repo=repo, task=task_name, ep=ep,
                                annotator=annotator_model,
                                annotators_available=annotators_available,
-                               ann=ann, override=ov.to_dict(),
+                               ann=ann, override=override_view,
                                head_cam=head_cam, wrist_cams=wrist_cams,
                                verification=verification,
                                seg_issues=seg_issues,

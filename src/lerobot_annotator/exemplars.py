@@ -31,22 +31,42 @@ _SEG_KEEP = {
 
 
 def find_verified(repo_id: str, exclude: set[int] | None = None) -> list[int]:
-    d = OVERRIDES_DIR / repo_safe_name(repo_id)
-    if not d.exists():
-        return []
-    out: list[int] = []
+    """Episodes where ANY annotator's annotation file has status == "verified".
+
+    Status moved from the shared override store onto the per-annotator
+    annotation, so this scan walks each annotator subdir under annotations/
+    and collects every episode flagged verified by any of them.
+    """
+    out: set[int] = set()
     exclude = exclude or set()
-    for p in sorted(d.glob("episode_*.json")):
-        try:
-            data = json.loads(p.read_text())
-            if data.get("status") != "verified":
+    for model in list_annotators_for_repo(repo_id):
+        model_dir = ANNOTATIONS_DIR / repo_safe_name(repo_id) / model
+        for p in sorted(model_dir.glob("episode_*.json")):
+            try:
+                data = json.loads(p.read_text())
+                if data.get("status") != "verified":
+                    continue
+                ep = int(p.stem.split("_")[1])
+                if ep in exclude:
+                    continue
+                out.add(ep)
+            except Exception:
                 continue
-            ep = int(p.stem.split("_")[1])
-            if ep in exclude:
+    # Legacy fallback: also honor the old shared override.status (so episodes
+    # verified before this migration still show up as exemplars).
+    legacy_dir = OVERRIDES_DIR / repo_safe_name(repo_id)
+    if legacy_dir.exists():
+        for p in sorted(legacy_dir.glob("episode_*.json")):
+            try:
+                data = json.loads(p.read_text())
+                if data.get("status") != "verified":
+                    continue
+                ep = int(p.stem.split("_")[1])
+                if ep in exclude:
+                    continue
+                out.add(ep)
+            except Exception:
                 continue
-            out.append(ep)
-        except Exception:
-            continue
     preferred = PREFERRED_EXEMPLARS.get(repo_id, [])
     rank = {ep: i for i, ep in enumerate(preferred)}
     return sorted(out, key=lambda ep: (0, rank[ep]) if ep in rank else (1, ep))

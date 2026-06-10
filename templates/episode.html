@@ -159,7 +159,10 @@
       <div id="segments">
       {% for seg in ann.segments %}
         {% set seg_idx = loop.index0 %}
-        <div class="seg-row {% if seg_issues.get(seg_idx) %}border border-2 border-danger{% endif %}" data-idx="{{ seg_idx }}">
+        <div class="seg-row {% if seg_issues.get(seg_idx) %}border border-2 border-danger{% endif %}"
+             data-idx="{{ seg_idx }}"
+             data-success-frame-path="{{ seg.get('success_frame_path') or '' }}"
+             data-success-frame-index="{{ seg.get('success_frame_index') if seg.get('success_frame_index') is not none else '' }}">
           {% if seg_issues.get(seg_idx) %}
             <div class="alert alert-warning py-1 mb-1 small">
               {% for issue in seg_issues[seg_idx] %}
@@ -245,7 +248,7 @@ function renderTimeline() {
 function collectSegments() {
   const segs = [];
   document.querySelectorAll('#segments .seg-row').forEach(row => {
-    segs.push({
+    const seg = {
       start_s: parseFloat(row.querySelector('.s-start').value),
       end_s:   parseFloat(row.querySelector('.s-end').value),
       arm:     row.querySelector('.s-arm').value,
@@ -253,7 +256,13 @@ function collectSegments() {
       vial_id: row.querySelector('.s-vial').value ? parseInt(row.querySelector('.s-vial').value) : null,
       instruction: row.querySelector('.instr').value,
       progress: row.querySelector('.s-prog').value,
-    });
+    };
+    // Carry through fields the form doesn't surface — otherwise saves drop them.
+    const sfPath = row.dataset.successFramePath;
+    const sfIdx  = row.dataset.successFrameIndex;
+    if (sfPath) seg.success_frame_path = sfPath;
+    if (sfIdx !== '' && sfIdx !== undefined) seg.success_frame_index = parseInt(sfIdx);
+    segs.push(seg);
   });
   return segs;
 }
@@ -267,6 +276,7 @@ function buildBody(includeStatus=null) {
   catch (e) { seq = undefined; }
   const body = {
     repo: REPO,
+    annotator: ANNOTATOR,
     total_vials: parseInt(document.getElementById('count').value) || null,
     stand_slots: parseInt(document.getElementById('stand_slots').value) || null,
     vial_descriptors: descs,

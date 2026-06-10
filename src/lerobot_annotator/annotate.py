@@ -147,10 +147,37 @@ def annotate_episode(
     backend = annotators.get(annotator_model)
     override = load_override(dataset.repo_id, episode_index)
 
-    # ---- pinned count: from override OR count-vote ----
+    # ---- pinned count: from override > explicit exemplar consensus > count-vote ----
     pinned_count = override.pinned_count
     count_info = {"source": "override" if pinned_count is not None else None,
                   "count": pinned_count, "model": annotator_model}
+    if pinned_count is None and task.count_vote and exemplar_episodes:
+        # User explicitly passed exemplars — if they unanimously agree on the count
+        # field, trust them and skip the vote. Saves ~30s/sample of model time and
+        # avoids cases where the model misreads the stand (e.g. ep 127 where
+        # gpt-5.5 voted [2,4,4,4,4] for what is actually 3 vials).
+        from .exemplars import load_cleaned_annotation
+        field = task.count_vote.field
+        exemplar_counts = []
+        seen_counts: dict[int, list[int]] = {}
+        for xep in exemplar_episodes:
+            if xep == episode_index:
+                continue
+            xann = load_cleaned_annotation(dataset.repo_id, xep, preferred_annotator=annotator_model)
+            if xann is None:
+                continue
+            xc = xann.get(field)
+            if isinstance(xc, int):
+                exemplar_counts.append(xc)
+                seen_counts.setdefault(xc, []).append(xep)
+        if exemplar_counts and len(set(exemplar_counts)) == 1:
+            pinned_count = exemplar_counts[0]
+            count_info = {
+                "source": "exemplar_consensus",
+                "count": pinned_count,
+                "exemplars": {str(k): v for k, v in seen_counts.items()},
+                "model": annotator_model,
+            }
     if pinned_count is None and task.count_vote:
         head_kfs = keyframes[head_cam]
         count_images: list[tuple[str, str]] = [("[FIRST_FRAME — initial scene]", head_kfs[0]["path"])]

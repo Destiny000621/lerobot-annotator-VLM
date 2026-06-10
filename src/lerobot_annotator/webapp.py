@@ -45,10 +45,33 @@ def _list_annotated_episodes(repo_id: str, annotator_model: str) -> list[int]:
 
 
 def _resolve_annotator(repo_id: str, requested: str | None) -> str:
-    """Pick which annotator subdir to show. Explicit > URL default > first discovered > config default."""
+    """Pick which annotator subdir to show.
+
+    Order: explicit > Referer URL's ?annotator= > DEFAULT_ANNOTATOR (if its
+    subdir exists for this repo) > first discovered subdir > DEFAULT_ANNOTATOR.
+
+    Preferring DEFAULT_ANNOTATOR over the alphabetical-first subdir keeps the
+    behavior stable when new annotator subdirs get added — without this,
+    adding `claude-opus-4-7/` would silently make every annotator-less POST
+    misroute to Claude even though the user was viewing a different model.
+    """
     if requested:
         return requested
+    # Try to recover the annotator from the page that issued the POST.
+    try:
+        from urllib.parse import urlparse, parse_qs
+        from flask import request as _req
+        ref = getattr(_req, "referrer", None)
+        if ref:
+            qs = parse_qs(urlparse(ref).query)
+            ref_annotator = qs.get("annotator", [None])[0]
+            if ref_annotator:
+                return ref_annotator
+    except Exception:
+        pass
     candidates = list_annotators_for_repo(repo_id)
+    if DEFAULT_ANNOTATOR in candidates:
+        return DEFAULT_ANNOTATOR
     if candidates:
         return candidates[0]
     return DEFAULT_ANNOTATOR
@@ -158,7 +181,19 @@ def create_app(default_repo: str | None = None, default_task: str | None = None)
 
         # Update segments inline if provided
         if "segments" in body:
-            ann["segments"] = body["segments"]
+            new_segs = body["segments"]
+            old_segs = ann.get("segments") or []
+            # Belt-and-braces: if the client didn't echo back success_frame_path /
+            # success_frame_index, recover them from the on-disk segments by
+            # position so the success-state thumbnails don't go blank after a save.
+            for i, seg in enumerate(new_segs):
+                if i >= len(old_segs):
+                    break
+                old = old_segs[i]
+                for f in ("success_frame_path", "success_frame_index"):
+                    if f not in seg and f in old:
+                        seg[f] = old[f]
+            ann["segments"] = new_segs
 
         # Update top-level fields (count, sequence, etc.)
         for k in ("total_vials", "stand_slots", "vial_descriptors", "pickup_sequence"):

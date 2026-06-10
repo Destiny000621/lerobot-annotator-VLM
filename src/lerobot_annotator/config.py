@@ -8,6 +8,7 @@ META_CACHE = ROOT / "meta_cache"
 VIDEO_CACHE = ROOT / "video_cache"
 KEYFRAMES_CACHE = ROOT / "keyframes_cache"
 ANNOTATIONS_DIR = ROOT / "annotations"
+ANNOTATIONS_SUMMARY_DIR = ROOT / "annotations_summary"
 OVERRIDES_DIR = ROOT / "overrides"
 SUCCESS_STATES_DIR = ROOT / "success_states"
 OUTPUT_LEROBOT = ROOT / "output_lerobot"
@@ -61,6 +62,13 @@ def model_safe_name(model_id: str) -> str:
 def annotation_dir(repo_id: str, annotator_model: str) -> "Path":
     """annotations/<repo_safe>/<annotator>/"""
     return ANNOTATIONS_DIR / repo_safe_name(repo_id) / model_safe_name(annotator_model)
+
+
+def summary_annotation_dir(repo_id: str, annotator_model: str) -> "Path":
+    """annotations_summary/<repo_safe>/<annotator>/ — event-level summary
+    annotations only (no per-frame segments). Lives in a separate tree from
+    full annotations so the two pipelines can coexist for the same episode."""
+    return ANNOTATIONS_SUMMARY_DIR / repo_safe_name(repo_id) / model_safe_name(annotator_model)
 
 
 def verification_dir(repo_id: str, annotator_model: str) -> "Path":

@@ -170,10 +170,15 @@ def generate_with_retry(
         resp = post(payload)
         text = resp["candidates"][0]["content"]["parts"][0]["text"]
         try:
-            parsed = json.loads(text)
+            from .validate import coerce_to_dict
+            parsed = coerce_to_dict(json.loads(text))
         except json.JSONDecodeError as e:
             attempts.append({"attempt": i, "issues": [f"json decode: {e}"], "text_head": text[:200]})
             last_issues = [f"json decode: {e}"]
+            continue
+        except ValueError as e:
+            attempts.append({"attempt": i, "issues": [str(e)], "text_head": text[:200]})
+            last_issues = [str(e)]
             continue
         issues = validate_fn(parsed)
         usage = resp.get("usageMetadata", {})

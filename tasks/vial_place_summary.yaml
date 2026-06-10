@@ -1,0 +1,87 @@
+name: vial_place_summary
+description: "Event-level (summary) annotation: vial count, descriptors, pickup order, per-vial arm assignments. ~10x cheaper than vial_place."
+default_task_string: "place the vial into the stand"
+
+# Task mode — routes output to annotations_summary/ and skips segment validation.
+mode: summary
+
+# Primitives kept for compatibility with shared infra (verifier, count_vote),
+# but the schema no longer requires per-frame segment classification.
+primitives:
+  - approach
+  - grasp
+  - transport
+  - align
+  - insert
+  - retract
+  - idle
+
+schema_extras:
+  total_vials: {type: int, range: [1, 4]}
+  vial_descriptors: {type: list}
+  pickup_sequence: {type: list}
+  vials: {type: list}
+
+# Empty — summary mode doesn't enforce per-segment fields (no segments).
+segment_extras: {}
+
+# No success-state JPEGs in summary mode (no segments to anchor them to).
+success_primitive: null
+
+count_vote:
+  field: total_vials
+  range: [1, 4]
+  prefer_final_frame: true
+  question: >
+    You are looking at a robot manipulation episode. The scene contains
+    between 1 and 4 small vials (each with a black cap) on a table near a
+    white stand (4x3 grid of slots). Count the vials seated in the stand
+    at the FINAL frame — that is the ground-truth count.
+
+# 0.5 Hz on head only — for a 50s episode, ~25 frames total instead of 100+.
+cam_fps:
+  head_camera: 0.5
+
+prompt_template: |
+  You are a robotics annotator. The robot is a dual-arm `yam` setup with a fixed overhead
+  (head) camera. The task is: "{task_string}". There can be 1, 2, 3, or 4 vials at
+  random positions.
+
+  You will receive a temporally ordered set of head-camera keyframes. The FIRST frame shows
+  the initial scene with all vials clearly visible.
+
+  Your job is **event-level**: extract just the high-level facts about what happened.
+  Do NOT produce per-frame segments — only the final summary.
+
+  === STABLE VIAL NUMBERING ===
+  Number the vials 1..N by their LEFT-TO-RIGHT POSITION IN THE FIRST FRAME (sort by horizontal
+  x-coordinate in the head-camera view). This numbering is FIXED for the entire episode.
+
+  Output STRICT JSON ONLY (no prose, no markdown), matching this schema:
+  {{
+    "total_vials": <int 1..4>,
+    "vial_descriptors": [
+      {{"vial_id": <int>, "descriptor": "<short positional descriptor from first frame>"}}
+    ],
+    "pickup_sequence": [<int>, ...],   // order vials are first picked up, e.g. [3, 1, 2]
+                                        // for bimanual simultaneous picks, use a sub-list: [[1,2], 3]
+    "vials": [
+      {{
+        "vial_id": <int>,
+        "grasp_arm": "left" | "right" | "both",
+        "insert_arm": "left" | "right" | "both"
+      }}
+    ]
+  }}
+
+  === SELF-CONSISTENCY CHECKS (REQUIRED BEFORE YOU REPLY) ===
+  1) vial_descriptors has exactly total_vials entries, vial_ids 1..N, each unique.
+  2) pickup_sequence is a permutation of 1..total_vials.
+  3) vials has exactly total_vials entries, one per vial_id 1..N.
+  4) Each vials[i].grasp_arm and insert_arm is one of "left", "right", or "both".
+
+  Other rules:
+  - Count the vials inserted in the STAND in the final keyframe — that is the ground truth.
+  - For each vial, determine which arm grasped it (first pickup) and which arm inserted it
+    into the stand. Usually grasp_arm == insert_arm, but record them separately.
+  - Use "both" only when two arms are visibly cooperating on the same vial simultaneously.

@@ -9,7 +9,7 @@ from . import annotators
 from .config import (
     COUNT_VOTE_SAMPLES, DEFAULT_ANNOTATOR, MAX_ANNOTATE_ATTEMPTS,
     MAX_IMAGES_PER_CALL, SUCCESS_STATES_DIR, VIDEO_CACHE,
-    annotation_dir, success_states_dir,
+    annotation_dir, summary_annotation_dir, success_states_dir,
 )
 from .dataset import LeRobotDataset
 from .exemplars import build_exemplar_parts
@@ -20,8 +20,11 @@ from .task import Task
 from .validate import validate
 
 
-def _annotation_path(repo_id: str, ep: int, annotator_model: str) -> Path:
-    return annotation_dir(repo_id, annotator_model) / f"episode_{ep:06d}.json"
+def _annotation_path(repo_id: str, ep: int, annotator_model: str,
+                     task_mode: str = "full") -> Path:
+    base = (summary_annotation_dir(repo_id, annotator_model) if task_mode == "summary"
+            else annotation_dir(repo_id, annotator_model))
+    return base / f"episode_{ep:06d}.json"
 
 
 def _success_dir(repo_id: str, ep: int, annotator_model: str) -> Path:
@@ -133,7 +136,8 @@ def annotate_episode(
     exemplar_episodes: list[int] | None = None,
 ) -> dict:
     """Run the full annotation pipeline for one episode. Idempotent unless overwrite=True."""
-    out_path = _annotation_path(dataset.repo_id, episode_index, annotator_model)
+    out_path = _annotation_path(dataset.repo_id, episode_index, annotator_model,
+                                task_mode=task.mode)
     if out_path.exists() and not overwrite:
         return json.loads(out_path.read_text())
 
@@ -229,7 +233,15 @@ def annotate_episode(
         max_attempts=MAX_ANNOTATE_ATTEMPTS,
     )
 
-    parsed = apply_post_call(parsed, override)
+    # Summary mode has no segments — don't let a stale pinned_segments override
+    # (from a prior full-mode run on the same episode) leak into the output.
+    if task.mode == "summary":
+        _saved = override.pinned_segments
+        override.pinned_segments = None
+        parsed = apply_post_call(parsed, override)
+        override.pinned_segments = _saved
+    else:
+        parsed = apply_post_call(parsed, override)
     parsed["repo_id"] = dataset.repo_id
     parsed["episode_index"] = episode_index
     parsed["length"] = info.length
@@ -245,7 +257,8 @@ def annotate_episode(
     parsed["status"] = override.status
     parsed["_raw_text"] = raw_text
 
-    _save_success_states(parsed, dataset, episode_index, task, annotator_model)
+    if task.mode != "summary":
+        _save_success_states(parsed, dataset, episode_index, task, annotator_model)
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps(parsed, indent=2))

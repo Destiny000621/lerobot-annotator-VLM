@@ -3,6 +3,7 @@
 __pycache__/
 *.pyc
 annotations/
+annotations_summary/
 overrides/
 keyframes_cache/
 video_cache/

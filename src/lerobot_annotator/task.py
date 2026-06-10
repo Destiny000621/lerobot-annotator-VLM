@@ -32,6 +32,7 @@ class Task:
     count_vote: CountVote | None
     cam_fps: dict[str, float]          # camera name -> sampling Hz; * means all cameras
     prompt_template: str               # the system prompt; rendered with .format(**ctx)
+    mode: str = "full"                 # "full" = per-frame segments; "summary" = event-level only
 
     def render_prompt(self, **ctx: Any) -> str:
         return self.prompt_template.format(**ctx)
@@ -63,6 +64,7 @@ def _from_dict(d: dict) -> Task:
         count_vote=cv,
         cam_fps=dict(d.get("cam_fps", {})),
         prompt_template=d["prompt_template"],
+        mode=d.get("mode", "full"),
     )
 
 

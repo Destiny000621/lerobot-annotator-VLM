@@ -157,11 +157,17 @@ class ClaudeAnnotator:
                 continue
             text = _extract_text(msg)
             try:
-                parsed = _parse_json_object(text)
+                from ..validate import coerce_to_dict
+                parsed = coerce_to_dict(_parse_json_object(text))
             except json.JSONDecodeError as e:
                 attempts.append({"attempt": i, "issues": [f"json decode: {e}"],
                                  "text_head": text[:200]})
                 last_issues = [f"json decode: {e}"]
+                continue
+            except ValueError as e:
+                attempts.append({"attempt": i, "issues": [str(e)],
+                                 "text_head": text[:200]})
+                last_issues = [str(e)]
                 continue
             issues = validate_fn(parsed)
             usage = _usage_dict(msg)

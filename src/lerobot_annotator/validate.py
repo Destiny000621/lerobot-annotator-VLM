@@ -6,16 +6,27 @@ from typing import Any
 from .task import Task
 
 
-def validate(parsed: dict, task: Task, duration_s: float, pinned_count: int | None = None) -> list[str]:
+def validate(parsed, task: Task, duration_s: float, pinned_count: int | None = None) -> list[str]:
+    # Defensive: if a backend forgot to unwrap, surface a clear error rather
+    # than crashing with AttributeError downstream. (The backends are expected
+    # to call coerce_to_dict() on the raw json.loads result before validation.)
+    if not isinstance(parsed, dict):
+        return [f"top-level JSON must be an object, got {type(parsed).__name__}"]
+
     issues: list[str] = []
 
-    # count constraint
+    # count constraint (applies to every task mode)
     if task.count_vote and pinned_count is not None:
         field = task.count_vote.field
         got = parsed.get(field)
         if got != pinned_count:
             issues.append(f"{field}={got} but pinned count is {pinned_count}")
 
+    # ---- summary-mode: lightweight per-vial checks, then return ----
+    if task.mode == "summary":
+        return _validate_summary(parsed, task, issues)
+
+    # ---- full-mode: per-frame segment checks below ----
     # segments contiguous + cover duration
     segs = sorted(parsed.get("segments", []), key=lambda s: s.get("start_s", 0.0))
     if not segs:
@@ -148,3 +159,67 @@ def validate(parsed: dict, task: Task, duration_s: float, pinned_count: int | No
                 issues.append(f"vials never referenced in any '{cover_prim}' segment: {sorted(missing)}")
 
     return issues
+
+
+def _validate_summary(parsed: dict, task: Task, issues: list[str]) -> list[str]:
+    """Schema checks for summary-mode (event-level) annotations.
+
+    Expects, at minimum:
+      total_vials:        int 1..N
+      vial_descriptors:   [{vial_id, descriptor}, ...]
+      pickup_sequence:    [int, ...] permutation of 1..total_vials
+      vials:              [{vial_id, grasp_arm, insert_arm}, ...]
+    """
+    n = parsed.get("total_vials")
+    if not isinstance(n, int) or n < 1:
+        issues.append(f"total_vials={n!r} is not a positive int")
+        return issues  # nothing else makes sense without N
+
+    # vial_descriptors covers 1..N
+    desc = parsed.get("vial_descriptors") or []
+    desc_ids = {d.get("vial_id") for d in desc if isinstance(d, dict)}
+    missing_desc = set(range(1, n + 1)) - desc_ids
+    if missing_desc:
+        issues.append(f"vial_descriptors missing vial_ids: {sorted(missing_desc)}")
+
+    # pickup_sequence is permutation of 1..N
+    seq = parsed.get("pickup_sequence") or []
+    flat: list[int] = []
+    for item in seq:
+        if isinstance(item, list):
+            flat.extend(item)
+        else:
+            flat.append(item)
+    if sorted(flat) != list(range(1, n + 1)):
+        issues.append(f"pickup_sequence {seq} not a permutation of 1..{n}")
+
+    # vials[] covers 1..N with arm fields populated
+    vials = parsed.get("vials") or []
+    vial_ids = {v.get("vial_id") for v in vials if isinstance(v, dict)}
+    missing_v = set(range(1, n + 1)) - vial_ids
+    if missing_v:
+        issues.append(f"vials missing vial_ids: {sorted(missing_v)}")
+    valid_arms = {"left", "right", "both"}
+    for v in vials:
+        if not isinstance(v, dict):
+            continue
+        for f in ("grasp_arm", "insert_arm"):
+            if v.get(f) not in valid_arms:
+                issues.append(f"vials[{v.get('vial_id')}].{f}={v.get(f)!r} not in {sorted(valid_arms)}")
+
+    return issues
+
+
+def coerce_to_dict(parsed):
+    """Some models wrap the response in a single-element list — `[{"...": ...}]`
+    instead of `{"...": ...}`. Auto-unwrap so the downstream pipeline (validation,
+    apply_post_call, on-disk annotation file) always sees a dict.
+
+    Returns the (possibly unwrapped) dict. Raises ValueError if the input isn't
+    a dict and isn't unwrappable to one.
+    """
+    if isinstance(parsed, list) and len(parsed) == 1 and isinstance(parsed[0], dict):
+        return parsed[0]
+    if not isinstance(parsed, dict):
+        raise ValueError(f"top-level JSON must be an object, got {type(parsed).__name__}")
+    return parsed

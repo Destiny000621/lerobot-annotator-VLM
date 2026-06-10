@@ -55,7 +55,12 @@ def cmd_annotate(args) -> None:
                                    exemplar_episodes=exemplar_episodes)
             dt = time.time() - t0
             n_ex = len(ann.get("exemplars_used", []))
-            print(f"[ep{ep:06d}] OK [{args.annotator}] segs={len(ann['segments'])} "
+            # Summary-mode outputs have no 'segments' — report vials list instead.
+            if task.mode == "summary":
+                shape = f"vials={len(ann.get('vials', []))}"
+            else:
+                shape = f"segs={len(ann.get('segments', []))}"
+            print(f"[ep{ep:06d}] OK [{args.annotator}] {shape} "
                   f"count={ann.get(task.count_vote.field if task.count_vote else '?')} "
                   f"exemplars={n_ex} attempts={len(ann.get('attempts', []))} ({dt:.1f}s)")
         except Exception as e:
